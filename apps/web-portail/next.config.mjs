@@ -1,5 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Netlify publie un portail statique : la sortie contient alors un vrai
+  // index.html au lieu du dossier de runtime interne .next.
+  output: "export",
   // Le contrôle ESLint reste exécuté séparément. Ne pas empêcher la génération
   // du portail distribuable à cause des avertissements historiques du portail.
   // Les vérifications strictes sont exécutées dans la CI; elles ne doivent pas
