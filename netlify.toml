@@ -6,6 +6,7 @@
 
 [build.environment]
   NODE_VERSION = "20"
+  NEXT_PUBLIC_PORTAL_API_URL = "https://blvd-quebec-qualify-responsible.trycloudflare.com/trpc"
 
 # Force le runtime officiel Netlify/Next.js : les routes dynamiques du portail
 # restent ainsi disponibles au lieu d'etre traitees comme de simples fichiers.
