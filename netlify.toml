@@ -1,6 +1,8 @@
 [build]
-  command = "pnpm --filter @isac-erp/web-portail build"
+  # Le portail depend des packages du monorepo, dont les artefacts ne sont pas
+  # versionnes dans Git. Ils doivent etre construits avant Next.js.
+  command = "pnpm --filter @isac-erp/shared build && pnpm --filter @isac-erp/db prisma:generate && pnpm --filter @isac-erp/db build && pnpm --filter @isac-erp/api build && pnpm --filter @isac-erp/web-portail build"
+  publish = "apps/web-portail/.next"
 
 [build.environment]
   NODE_VERSION = "20"
-
