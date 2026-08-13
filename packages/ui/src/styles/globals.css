@@ -1,0 +1,333 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Le menu déroulant natif d'un <select> (liste d'<option>) est rendu par l'OS avec un fond clair,
+   quelle que soit la couleur du <select> fermé lui-même (ex. sélecteur d'année de la barre du haut,
+   texte blanc sur fond bleu une fois fermé) — sans cette règle, le texte hérite du blanc du parent et
+   devient invisible sur le fond clair de la liste ouverte (2026-08-09, retour du porteur du projet). */
+@layer base {
+  select option {
+    color: hsl(var(--foreground));
+    background-color: hsl(var(--background));
+  }
+}
+
+/*
+ * Tokens de thème par défaut (Module 0), au format HSL sans fonction hsl()
+ * pour rester compatibles avec l'opacité Tailwind (hsl(var(--x) / <alpha>)).
+ * Palette neutre professionnelle — remplaçable par établissement au Module 2.
+ */
+@layer base {
+  :root {
+    /*
+     * Charte graphique de la refonte UI/UX (2026-07-30, retour du porteur du projet, Phase 1 —
+     * Fondations) : bleu marine (un peu plus foncé que la version précédente), blanc, gris très
+     * clair, rouge pour les alertes, vert pour les validations, orange réservé aux avertissements.
+     * Reste personnalisable par établissement depuis Paramètres → Apparence (Module 2 §3.15) pour
+     * primary/secondary/button/menu ; success/destructive/warning restent des tons sémantiques fixes,
+     * cohérents sur toute l'application quel que soit l'établissement.
+     */
+    --background: 0 0% 100%;
+    --foreground: 222 47% 11%;
+
+    --border: 220 14% 90%;
+
+    /* Couleur des fenêtres (extension du 2026-07-30, retour du porteur du projet) : fond de tous
+       les panneaux/cartes/boîtes de dialogue de l'application ("les fenêtres"), personnalisable
+       depuis Paramètres → Apparence. Valeur par défaut = le bleu des entêtes de tableau (--secondary),
+       recopiée ici en dur plutôt qu'aliasée pour rester indépendante si --secondary change un jour.
+       --background reste volontairement inchangé (blanc) : c'est le socle des zones de saisie
+       (Input/Select) et du contenu des tableaux, qui doivent rester intacts. */
+    --window: 199 89% 38%;
+    --window-foreground: 0 0% 100%;
+
+    --primary: 220 65% 18%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 199 89% 38%;
+    --secondary-foreground: 0 0% 100%;
+
+    /* Couleur des boutons et du menu — distinctes de primary/muted pour que
+       la personnalisation graphique (Module 2 §3.15) puisse les régler
+       indépendamment. Mêmes valeurs par défaut pour l'instant. */
+    --button: 220 65% 18%;
+    --button-foreground: 0 0% 100%;
+    --menu: 220 65% 18%;
+    --menu-foreground: 0 0% 100%;
+
+    /* Gris très clair — fond des surfaces secondaires (cartes, lignes alternées, zones désactivées).
+       Remplace l'ancien gris-bleuté provisoire du Module 0. */
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 9% 40%;
+
+    /* Adoucies le 2026-07-30 (retour du porteur du projet, sur capture d'écran du tableau de bord :
+       les tons vifs d'origine jugés trop agressifs) — désaturées tout en gardant un contraste
+       suffisant pour le texte blanc (vérifié ≥ 3.3:1). Réglables individuellement depuis
+       Paramètres → Apparence (extension du même jour) si ce nouveau défaut ne convient pas. */
+    --destructive: 0 50% 52%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 40% 38%;
+    --success-foreground: 0 0% 100%;
+
+    /* Avertissement — exclusivement orange, jamais utilisé pour autre chose (alertes = rouge,
+       validations = vert). */
+    --warning: 32 55% 48%;
+    --warning-foreground: 0 0% 100%;
+
+    --radius: 10px;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply text-window-foreground font-sans antialiased;
+    background-color: hsl(var(--window));
+    background-image:
+      radial-gradient(900px 400px at 15% -10%, rgba(91, 63, 160, 0.4), transparent 60%),
+      radial-gradient(700px 360px at 100% 0%, rgba(201, 115, 155, 0.28), transparent 60%);
+    background-attachment: fixed;
+  }
+}
+
+/* Fond de fenêtre "bleu profond + halo" — expérimentation retenue le 2026-07-31 (option D du choix
+   de style de fenêtre) : couleur de base --window inchangée/réglable depuis Paramètres, avec deux
+   halos diffus violet/rose superposés en dégradés radiaux pour donner de la profondeur. Appliqué à
+   body (ci-dessus) et, via cette classe, à Card (variante par défaut) et Dialog — jamais à l'entête
+   de l'application (AppShell), qui reste un bleu plat pour garder un repère "chrome" stable. Classe
+   dédiée plutôt qu'un cumul de bg-window + bg-image en className : cn() n'utilise pas
+   tailwind-merge, deux classes de fond concurrentes sur le même élément ne se fondent pas de façon
+   fiable (voir ChartCard). */
+.window-surface {
+  background-color: hsl(var(--window));
+  background-image:
+    radial-gradient(700px 320px at 10% -20%, rgba(91, 63, 160, 0.35), transparent 60%),
+    radial-gradient(560px 280px at 100% 0%, rgba(201, 115, 155, 0.24), transparent 60%);
+}
+
+/* Cartes de formulaire ("form") — "Option C, relief marqué" retenue le 2026-08-09 après 3 maquettes
+   sur la fiche Identité étudiant : bandeau d'entête en dégradé --button (premier enfant, en pratique
+   toujours un <CardHeader><CardTitle>...) au-dessus d'un corps clair, remplace l'ancien voile nacré
+   violet/rose + barre latérale. Généralisé à toutes les cartes "form" de l'application (mêmes
+   principes que la refonte des tableaux ci-dessous) — champs internes (Input/Select) volontairement
+   non retouchés ici, leur style reste partagé par toute l'application au-delà des seules cartes. */
+@layer components {
+  .card-form-relief {
+    background-color: hsl(var(--background));
+  }
+  .card-form-relief > :first-child {
+    background: linear-gradient(120deg, hsl(var(--button)), hsl(var(--button) / 0.78));
+    color: hsl(var(--button-foreground));
+    border-radius: 16px 16px 0 0;
+  }
+}
+
+/* Style "carte" des lignes de DataTable/ServerDataTable, appliqué par défaut à TOUS les tableaux de
+   l'application (2026-08-09, retour du porteur du projet : "je veux que tout les tableaux de cette
+   app ressemble à ce design", après validation sur l'écran Étudiants) : entête en dégradé --button,
+   lignes en carte arrondie avec bordure bleue nette sur les 4 côtés, accent en dégradé sur le bord
+   gauche, texte en gras, et une ligne sur deux légèrement teintée en dégradé bleu (l'autre reste
+   blanche) plutôt que deux nuances de la même couleur partout. Anciennement opt-in via une classe
+   `.table-accent-button` propre à l'écran Étudiants — généralisé ici à la demande du porteur du
+   projet ; voir MODULE-00 pour le principe "un seul design de tableau dans toute l'application". */
+@layer components {
+  .table-row-card > td {
+    background-color: hsl(var(--background));
+    border-top: 2px solid hsl(var(--button) / 0.3);
+    border-bottom: 2px solid hsl(var(--button) / 0.3);
+    box-shadow: 0 6px 16px -6px hsl(var(--button) / 0.28);
+    font-weight: 600;
+    transition: box-shadow 150ms ease, transform 150ms ease;
+  }
+  .table-row-card:nth-child(odd) > td {
+    background-image: linear-gradient(90deg, hsl(var(--button) / 0.09), hsl(var(--button) / 0.02));
+  }
+  .table-row-card:hover > td {
+    box-shadow: 0 14px 28px -10px hsl(var(--button) / 0.4);
+    transform: translateY(-2px);
+  }
+  /* Pas de padding-left dédié ici : une classe utilitaire Tailwind (px-3, couche "utilities")
+     gagnerait toujours sur une règle de la couche "components" quelle que soit sa spécificité —
+     même limite que cn() sans tailwind-merge (voir ChartCard). Le padding par défaut (12px) laisse
+     déjà assez de place pour la barre de 7px ci-dessous (~5px d'air avant le texte). */
+  .table-row-card > td:first-child {
+    position: relative;
+    border-left: 2px solid hsl(var(--button) / 0.3);
+    border-radius: 14px 0 0 14px;
+  }
+  .table-row-card > td:first-child::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 7px;
+    border-radius: 14px 0 0 14px;
+    background: linear-gradient(180deg, hsl(var(--button)), hsl(var(--button) / 0.45));
+  }
+  .table-row-card > td:last-child {
+    border-right: 2px solid hsl(var(--button) / 0.3);
+    border-radius: 0 14px 14px 0;
+  }
+
+  .table-head-card > th {
+    background: linear-gradient(180deg, hsl(var(--button)), hsl(var(--button) / 0.82));
+    color: hsl(var(--button-foreground));
+  }
+  .table-head-card > th:first-child {
+    border-radius: 12px 0 0 12px;
+  }
+  .table-head-card > th:last-child {
+    border-radius: 0 12px 12px 0;
+  }
+
+}
+
+/* Animations d'ouverture des fenêtres/dialogues — refonte UI/UX Phase 1 (2026-07-30, §"Fenêtres et
+   boîtes de dialogue"). Pas de dépendance externe (tailwindcss-animate) : deux keyframes suffisent. */
+@layer utilities {
+  .animate-overlay-in {
+    animation: isac-overlay-in 150ms ease-out;
+  }
+  .animate-dialog-in {
+    animation: isac-dialog-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes isac-overlay-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes isac-dialog-in {
+    from {
+      opacity: 0;
+      transform: scale(0.96) translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1) translateY(0);
+    }
+  }
+
+  /* Halo pulsé autour de l'avatar de la fiche élève (refonte "Contraste marine", 2026-08-02) — utilise
+     --secondary (personnalisable, voir Paramètres → Apparence) pour rester cohérent avec la couleur
+     d'accent déjà réglable de l'établissement, plutôt qu'une teinte fixe. */
+  .animate-avatar-glow {
+    animation: isac-avatar-glow 2.6s ease-in-out infinite;
+  }
+  @keyframes isac-avatar-glow {
+    0%,
+    100% {
+      box-shadow: 0 0 0 5px hsl(var(--secondary) / 0.12), 0 0 16px hsl(var(--secondary) / 0.3);
+    }
+    50% {
+      box-shadow: 0 0 0 8px hsl(var(--secondary) / 0.18), 0 0 26px hsl(var(--secondary) / 0.5);
+    }
+  }
+}
+
+/* Impression ciblée (reçus de paiement — MODULE-04.3 §1.5, réutilisable par tout futur document imprimable) :
+   seul l'élément marqué [data-print-area] est visible à l'impression. */
+@media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+  /* La quasi-totalité de l'application (menu latéral, écrans en arrière-plan...) vit sous #root ;
+     la Dialog qui porte [data-print-area] est rendue en portail directement sous <body> (voir
+     Dialog.tsx). On masque #root en bloc plutôt qu'en visibility:hidden, pour ne laisser aucun
+     espace réservé au-dessus du document imprimé (visibility:hidden conserve l'espace occupé). */
+  #root {
+    display: none !important;
+  }
+  body * {
+    visibility: hidden;
+  }
+  [data-print-area],
+  [data-print-area] * {
+    visibility: visible;
+  }
+  [data-print-area] {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+  }
+  /* La plupart des documents imprimables (bulletin de paie, reçu...) sont rendus à l'intérieur
+     d'une Dialog modale en `position: fixed`. Un ancêtre `fixed` "réancre" un descendant
+     `position: absolute` sur CHAQUE page imprimée (au lieu de le laisser s'écouler normalement
+     sur plusieurs pages) — l'en-tête ne s'affichait alors que sur la première page et le
+     contenu de fin (pied de page, second exemplaire) débordait ou disparaissait sur la
+     deuxième. On neutralise donc le positionnement/l'habillage de la Dialog à l'impression pour
+     que [data-print-area] retrouve un flux normal, paginable sur autant de pages que nécessaire. */
+  [data-dialog-overlay] {
+    position: static !important;
+    inset: auto !important;
+    background: none !important;
+    padding: 0 !important;
+    display: block !important;
+  }
+  [data-dialog-panel] {
+    display: block !important;
+    max-width: none !important;
+    max-height: none !important;
+    width: auto !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+  }
+  /* Refonte UI/UX Phase 1 (2026-07-30) : l'en-tête (titre, icône, bouton fermer) et le padding
+     du corps de la Dialog n'ont aucun sens à l'impression — seul [data-print-area] doit rester. */
+  [data-dialog-header] {
+    display: none !important;
+  }
+  [data-dialog-body] {
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+}
+
+/*
+ * Moteur de thèmes d'impression — source unique des couleurs de tous les documents imprimables
+ * (bulletin de paie, reçus, futurs certificats/attestations/factures...). Chaque document définit
+ * les valeurs --print-* sur son conteneur [data-print-area] via les couleurs lues depuis
+ * printThemeSettings (voir usePrintTheme côté apps/desktop) ; ces classes utilitaires sont les
+ * SEULES à référencer ces variables — aucun document ne doit coder une couleur en dur.
+ * Repli par défaut = thème "Noir administratif" pour un rendu correct même avant chargement.
+ */
+@layer utilities {
+  .print-border {
+    border-color: var(--print-border-color, #000000);
+  }
+  .print-separator {
+    border-color: var(--print-separator-color, #000000);
+  }
+  .print-title {
+    color: var(--print-title-color, #000000);
+  }
+  .print-header {
+    color: var(--print-header-color, #000000);
+  }
+  .print-table-border {
+    border-color: var(--print-table-color, #000000);
+  }
+  .print-text {
+    color: var(--print-primary-text-color, #000000);
+  }
+  .print-text-secondary {
+    color: var(--print-secondary-text-color, #4b5563);
+  }
+  .print-box {
+    border-color: var(--print-box-color, #000000);
+  }
+  .print-total {
+    color: var(--print-total-color, #000000);
+  }
+  .print-net {
+    color: var(--print-net-amount-color, #000000);
+  }
+}

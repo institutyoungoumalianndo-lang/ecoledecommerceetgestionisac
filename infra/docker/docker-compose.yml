@@ -1,0 +1,18 @@
+name: isac-erp-dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: isac-erp-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: isac_erp
+      POSTGRES_PASSWORD: isac_erp_dev
+      POSTGRES_DB: isac_erp
+    ports:
+      - "5432:5432"
+    volumes:
+      - isac-erp-postgres-data:/var/lib/postgresql/data
+
+volumes:
+  isac-erp-postgres-data:

@@ -1,0 +1,5 @@
+-- AlterEnum
+ALTER TYPE "DocumentType" ADD VALUE 'FICHE_INSCRIPTION';
+
+-- AlterEnum
+ALTER TYPE "NumberingPurpose" ADD VALUE 'FICHE_INSCRIPTION';

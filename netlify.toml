@@ -1,0 +1,6 @@
+[build]
+  command = "pnpm --filter @isac-erp/web-portail build"
+
+[build.environment]
+  NODE_VERSION = "20"
+

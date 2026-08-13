@@ -1,0 +1,53 @@
+# Dépendances
+node_modules/
+.pnpm-store/
+
+# Build
+dist/
+out/
+build/
+output/
+.turbo/
+release/
+
+# Environnement (secrets locaux, jamais commités)
+.env
+.env.local
+!.env.example
+
+# Prisma
+packages/db/prisma/dev.db*
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Tests
+coverage/
+playwright-report/
+test-results/
+
+# Éditeurs / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# Electron
+apps/desktop/out/
+apps/desktop/resources/campus-server/
+apps/desktop/release/
+apps/desktop/release-*/
+apps/desktop/win-unpacked/
+
+# Archive locale de l'ancien historique Git (non publiee)
+.git-backup-20260813/
+
+# Artefacts Next.js
+apps/web-portail/.next/
+
+# Fichiers importés par les utilisateurs (logos, signatures, cachet, thème — Module 2)
+packages/api/uploads/*
+!packages/api/uploads/.gitkeep

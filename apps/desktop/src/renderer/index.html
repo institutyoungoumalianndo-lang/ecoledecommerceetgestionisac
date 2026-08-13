@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- connect-src/img-src ouverts à tout hôte http (pas seulement localhost) depuis que l'adresse
+         du serveur LAN du campus est configurable par poste (ADR-007/ADR-054) — sans ça, un poste
+         collaborateur pointant vers l'IP du serveur (ex. 192.168.1.10:4310) verrait toutes ses
+         requêtes bloquées silencieusement par le navigateur. Toujours confiné au réseau local
+         (architecture mono-campus, ADR-005), jamais une exposition Internet. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://*:* ws://*:*; img-src 'self' data: http://*:*;" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ISAC ERP</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,22 @@
+appId: com.isac.erp.desktop
+productName: ISAC ERP
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+extraResources:
+  - from: resources/campus-server
+    to: campus-server
+    filter:
+      - "**/*"
+win:
+  signAndEditExecutable: false
+  target:
+    - target: nsis
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true

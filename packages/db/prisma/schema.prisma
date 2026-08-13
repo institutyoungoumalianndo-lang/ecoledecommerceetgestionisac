@@ -1,0 +1,3440 @@
+// Schéma Prisma — Module 0 (socle technique)
+//
+// Ce fichier ne contient volontairement aucune table métier. Le modèle
+// SystemHealth n'existe que pour valider la chaîne complète Electron -> API
+// locale -> PostgreSQL de bout en bout (voir docs/modules/MODULE-00-socle-technique.md).
+// Les tables métier réelles commencent au Module 1 (Identité & Accès).
+//
+// Conventions actées (voir docs/ARCHITECTURE_MASTER.md §7) :
+// - snake_case en base, mappé vers camelCase côté TypeScript via @map/@@map
+// - created_at / updated_at systématiques
+// - clés primaires en UUID (extensibilité multi-campus future, voir DECISIONS.md ADR-005)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model SystemHealth {
+  id        String   @id @default(uuid())
+  checkedAt DateTime @default(now()) @map("checked_at")
+
+  @@map("system_health")
+}
+
+// ---------------------------------------------------------------------------
+// Module 1 — Identité, Authentification et Gestion des Accès
+// Voir docs/modules/MODULE-01-identite-acces.md pour l'analyse et les règles
+// métier détaillées derrière ce schéma. Rien n'est supprimé physiquement sur
+// les entités sensibles (users) : voir champ deletedAt.
+// ---------------------------------------------------------------------------
+
+model User {
+  id                  String    @id @default(uuid())
+  firstName           String    @map("first_name")
+  lastName            String    @map("last_name")
+  username            String    @unique
+  passwordHash        String    @map("password_hash")
+  email               String?   @unique
+  phone               String?
+  jobTitle            String?   @map("job_title")
+  photoPath           String?   @map("photo_path")
+  isActive            Boolean   @default(true) @map("is_active")
+  failedLoginAttempts Int       @default(0) @map("failed_login_attempts")
+  lockedUntil         DateTime? @map("locked_until")
+  passwordChangedAt   DateTime  @default(now()) @map("password_changed_at")
+  mustChangePassword  Boolean   @default(false) @map("must_change_password")
+  /// Double authentification (Module 11) — secret TOTP en clair (même périmètre de confiance que le
+  /// reste de la base, pas de champ chiffré séparé ailleurs dans ce projet), lisible uniquement pour
+  /// vérifier un code au moment de la connexion, jamais exposé au client.
+  totpSecret          String?   @map("totp_secret")
+  totpEnabled         Boolean   @default(false) @map("totp_enabled")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+  deletedAt           DateTime? @map("deleted_at")
+
+  roles           UserRole[]    @relation("UserRoles")
+  rolesAssigned   UserRole[]    @relation("AssignedByUser")
+  sessions        UserSession[]
+  auditLogEntries AuditLog[]
+  twoFactorBackupCodes  TwoFactorBackupCode[]
+  databaseBackupsCreated DatabaseBackup[]
+  assetMovementsChanged     AssetMovement[]
+  assetMaintenancesCreated  AssetMaintenance[]
+  loansCreated              Loan[]
+  digitalDocumentsUploaded  DigitalDocument[]
+  digitalDocumentSharesSent DigitalDocumentShare[]
+  portalCredentialsCreated  PortalCredential[]
+  activationKeysCreated     ActivationKey[]        @relation("ActivationKeyCreatedBy")
+  activationKeyUsed         ActivationKey?         @relation("ActivationKeyUsedBy")
+
+  // Relations inverses — Module 2 (Paramètres)
+  campusesManaged       CampusSettings[]
+  academicYearsReopened AcademicYear[]
+  filieresResponsable   Filiere[]
+  signatoriesLinked     DocumentSignatory[]
+
+  // Relations inverses — Module 4 (Étudiants)
+  studentsArchived         Student[]
+  studentDocumentsUploaded StudentDocument[]
+
+  // Relations inverses — Module 4.1 (Inscriptions et réinscriptions)
+  enrollmentsCancelled StudentEnrollment[] @relation("EnrollmentCancelledBy")
+
+  // Relations inverses — Module 4.2 (Frais de scolarité)
+  feeReductionsRecorded FeeReduction[]
+
+  // Relations inverses — Module 4.3 (Paiements et caisse)
+  cashSessionsOpened CashRegisterSession[] @relation("CashSessionOpenedBy")
+  cashSessionsClosed CashRegisterSession[] @relation("CashSessionClosedBy")
+  paymentsRecorded   Payment[]             @relation("PaymentRecordedBy")
+  paymentsCancelled  Payment[]             @relation("PaymentCancelledBy")
+
+  // Relations inverses — Module 7 (Comptabilité)
+  accountingPeriodsLocked  AccountingPeriod[]
+  journalEntriesCreated    JournalEntry[]     @relation("JournalEntryCreatedBy")
+  journalEntriesCancelled  JournalEntry[]     @relation("JournalEntryCancelledBy")
+  expensesResponsible      Expense[]          @relation("ExpenseResponsible")
+  expensesApproved         Expense[]          @relation("ExpenseApprovedBy")
+  expensesCreated          Expense[]          @relation("ExpenseCreatedBy")
+  expenseDocumentsUploaded ExpenseDocument[]
+
+  // Relations inverses — Module 2.1 (Structure pédagogique)
+  teachingUnitsResponsible TeachingUnit[]
+
+  // Relations inverses — Module 5 (Gestion des enseignants)
+  teachersArchived         Teacher[]
+  teacherDocumentsUploaded TeacherDocument[]
+
+  // Relations inverses — Module 8 (Paie)
+  employeesArchived     Employee[]
+  payPeriodsValidated   PayPeriod[]
+  payrollLinesValidated PayrollLine[]
+
+  // Relations inverses — Module 5.1/5.2 (Emploi du temps et pointage des enseignants)
+  timesheetsClosed TeacherMonthlyTimesheet[]
+  seancesValidated Seance[]
+
+  // Relations inverses — Module 6 (Évaluation)
+  notesSaisies            Note[]
+  bulletinsPeriodeGeneres BulletinPeriode[]
+  bulletinsPeriodeAnnules BulletinPeriode[] @relation("BulletinPeriodeAnnuleParUser")
+  bulletinsAnnuelsGeneres BulletinAnnuel[]
+  bulletinsAnnuelsAnnules BulletinAnnuel[]  @relation("BulletinAnnuelAnnuleParUser")
+
+  // Relations inverses — Module 12 (Centre de Communication Intelligent)
+  campaignsCreated      Campaign[]
+  communicationsSentBy  CommunicationMessage[]
+  internalNotifications InternalNotification[]
+
+  // Relation inverse — Module 9 (Moteur centralisé de documents officiels)
+  generatedDocuments GeneratedDocument[]
+
+  // Relations inverses — Module 9.1 (Carte d'étudiant officielle)
+  studentCardsGenerated StudentCard[]        @relation("StudentCardGeneratedBy")
+  studentCardsCancelled StudentCard[]        @relation("StudentCardCancelledBy")
+  studentCardReprints   StudentCardReprint[]
+
+  // Relations inverses — Sanctions disciplinaires (2026-08-03, retour du porteur du projet)
+  sanctionsIssued   Sanction[] @relation("SanctionIssuedBy")
+  sanctionsAnnulees Sanction[] @relation("SanctionAnnuleBy")
+
+  // Relation inverse — Absences des étudiants (2026-08-03, retour du porteur du projet)
+  studentAbsencesCreated StudentAbsence[] @relation("StudentAbsenceCreatedBy")
+
+  // Relation inverse — Sessions de rattrapage / Sessionnaires (2026-08-03, retour du porteur du projet)
+  rattrapageSessionsCreated RattrapageSession[] @relation("RattrapageSessionCreatedBy")
+
+  @@map("users")
+}
+
+model Role {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  label     String
+  isSystem  Boolean  @default(false) @map("is_system")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  users       UserRole[]
+  permissions RolePermission[]
+  activationKeys ActivationKey[]
+
+  @@map("roles")
+}
+
+model UserRole {
+  userId     String   @map("user_id")
+  roleId     String   @map("role_id")
+  assignedAt DateTime @default(now()) @map("assigned_at")
+  assignedBy String?  @map("assigned_by")
+
+  user           User  @relation("UserRoles", fields: [userId], references: [id], onDelete: Cascade)
+  role           Role  @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  assignedByUser User? @relation("AssignedByUser", fields: [assignedBy], references: [id], onDelete: SetNull)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+enum PermissionAction {
+  LECTURE
+  CREATION
+  MODIFICATION
+  SUPPRESSION
+  IMPRESSION
+  EXPORT
+  VALIDATION
+  ADMINISTRATION
+}
+
+model Permission {
+  id        String           @id @default(uuid())
+  code      String           @unique
+  module    String
+  action    PermissionAction
+  label     String
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String   @map("role_id")
+  permissionId String   @map("permission_id")
+  grantedAt    DateTime @default(now()) @map("granted_at")
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserSession {
+  id             String    @id @default(uuid())
+  userId         String    @map("user_id")
+  tokenHash      String    @unique @map("token_hash")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  lastActivityAt DateTime  @default(now()) @map("last_activity_at")
+  expiresAt      DateTime  @map("expires_at")
+  ipAddress      String?   @map("ip_address")
+  userAgent      String?   @map("user_agent")
+  revokedAt      DateTime? @map("revoked_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_sessions")
+}
+
+enum AuditResult {
+  SUCCES
+  ECHEC
+}
+
+model AuditLog {
+  id            String      @id @default(uuid())
+  userId        String?     @map("user_id")
+  usernameInput String?     @map("username_input")
+  action        String
+  module        String
+  entityType    String?     @map("entity_type")
+  entityId      String?     @map("entity_id")
+  result        AuditResult
+  details       Json?
+  ipAddress     String?     @map("ip_address")
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("audit_log")
+}
+
+/// Politique de sécurité, propriété du Module 1. Une seule ligne (singleton).
+model SecuritySettings {
+  id                          String   @id @default(uuid())
+  maxFailedLoginAttempts      Int      @default(5) @map("max_failed_login_attempts")
+  accountLockoutMinutes       Int      @default(15) @map("account_lockout_minutes")
+  sessionInactivityTimeoutMin Int      @default(30) @map("session_inactivity_timeout_min")
+  passwordExpirationEnabled   Boolean  @default(false) @map("password_expiration_enabled")
+  passwordExpirationDays      Int?     @map("password_expiration_days")
+  /// Politique de mot de passe renforcée (Module 11, 2026-08-06) — remplace la règle fixe
+  /// (8 caractères/1 majuscule/1 chiffre) par des seuils configurables, appliqués à la création et
+  /// au changement de mot de passe, jamais rétroactivement sur les mots de passe déjà en place.
+  passwordMinLength           Int      @default(8) @map("password_min_length")
+  passwordRequireUppercase    Boolean  @default(true) @map("password_require_uppercase")
+  passwordRequireNumber       Boolean  @default(true) @map("password_require_number")
+  passwordRequireSymbol       Boolean  @default(false) @map("password_require_symbol")
+  updatedAt                   DateTime @updatedAt @map("updated_at")
+
+  @@map("security_settings")
+}
+
+// ---------------------------------------------------------------------------
+// Module 2 — Paramètres généraux et configuration de l'établissement
+// Voir docs/modules/MODULE-02-parametres-etablissement.md pour l'analyse et
+// les règles métier détaillées. Remplace EstablishmentDisplay (Module 1),
+// dont les 3 champs sont migrés dans EstablishmentSettings/CampusSettings.
+// ---------------------------------------------------------------------------
+
+/// Établissement — singleton (une seule ligne par installation).
+model EstablishmentSettings {
+  id                       String   @id @default(uuid())
+  officialName             String   @map("official_name")
+  acronym                  String?
+  motto                    String?
+  slogan                   String?
+  address                  String?
+  city                     String?
+  prefecture               String?
+  region                   String?
+  country                  String?
+  phones                   String[]
+  primaryEmail             String?  @map("primary_email")
+  secondaryEmail           String?  @map("secondary_email")
+  website                  String?
+  logoPrimaryPath          String?  @map("logo_primary_path")
+  logoSecondaryPath        String?  @map("logo_secondary_path")
+  ministryLogoPath         String?  @map("ministry_logo_path")
+  faviconPath              String?  @map("favicon_path")
+  authorizationNumber      String?  @map("authorization_number")
+  taxNumber                String?  @map("tax_number")
+  rccmNumber               String?  @map("rccm_number")
+  administrativeReferences String?  @map("administrative_references")
+  legalMentions            String?  @map("legal_mentions")
+  createdAt                DateTime @default(now()) @map("created_at")
+  updatedAt                DateTime @updatedAt @map("updated_at")
+
+  @@map("establishment_settings")
+}
+
+/// Campus — singleton (un seul campus par installation, ADR-005).
+model CampusSettings {
+  id            String   @id @default(uuid())
+  name          String
+  code          String?
+  address       String?
+  phones        String[]
+  email         String?
+  gpsLatitude   Float?   @map("gps_latitude")
+  gpsLongitude  Float?   @map("gps_longitude")
+  managerUserId String?  @map("manager_user_id")
+  /// Logo du campus — voir MODULE-09 §1.3, distinct des logos établissement/ministère (EstablishmentSettings).
+  logoPath      String?  @map("logo_path")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  managerUser User? @relation(fields: [managerUserId], references: [id], onDelete: SetNull)
+
+  @@map("campus_settings")
+}
+
+enum SignatoryRole {
+  DIRECTEUR_GENERAL
+  DIRECTEUR_CAMPUS
+  DIRECTEUR_ETUDES
+  COMPTABLE
+  RESPONSABLE_ADMINISTRATIF
+}
+
+model DocumentSignatory {
+  id                 String        @id @default(uuid())
+  roleCode           SignatoryRole @unique @map("role_code")
+  displayName        String?       @map("display_name")
+  title              String?
+  signatureImagePath String?       @map("signature_image_path")
+  linkedUserId       String?       @map("linked_user_id")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
+
+  linkedUser        User?              @relation(fields: [linkedUserId], references: [id], onDelete: SetNull)
+  documentTemplates DocumentTemplate[]
+
+  @@map("document_signatories")
+}
+
+enum DocumentType {
+  CARTE_ETUDIANT
+  ATTESTATION
+  CERTIFICAT
+  BULLETIN
+  RECU
+  FACTURE
+  DIPLOME
+  CONVOCATION
+  DECISION
+
+  // Module 9 — Moteur centralisé de documents officiels — Tier 1 (voir MODULE-09 §0.4)
+  CERTIFICAT_SCOLARITE
+  ATTESTATION_INSCRIPTION
+  ATTESTATION_TRAVAIL
+  LISTE_ETUDIANTS
+  LISTE_ENSEIGNANTS
+  LISTE_CLASSES
+  FICHE_EMARGEMENT
+  EMPLOI_DU_TEMPS
+  HISTORIQUE_PAIEMENTS
+  // Rapports comptables/de caisse — validés le 2026-07-30 (retour du porteur du projet), voir ADR-053.
+  // RAPPORT_CAISSE passe du Tier 2 (catalogue seul, ADR-049) au Tier 1 (implémenté) à cette occasion.
+  GRAND_LIVRE_CAISSE
+  ETAT_RECETTES
+  RAPPORT_CAISSE
+  JOURNAL_CAISSE
+  SITUATION_CAISSE_JOURNALIERE
+  // Bilan mensuel/semestriel/annuel — dernier élément du périmètre comptable validé le 2026-07-30
+  // (voir ADR-053) ; distinct de RAPPORT_FINANCIER (resté Tier 2, catalogue seul).
+  BILAN
+  // Fiche d'inscription et de réinscription — formulaire vierge à remplir à la main par l'étudiant
+  // (2026-08-02, retour du porteur du projet) : sans entité liée, même principe que RAPPORT_CAISSE/
+  // ETAT_RECETTES ci-dessus.
+  FICHE_INSCRIPTION
+  // Fiche d'inscription complétée — version remplie de la fiche ci-dessus, liée à un étudiant précis
+  // (studentId), avec photo et informations réelles pré-remplies (2026-08-03, retour du porteur du projet).
+  FICHE_INSCRIPTION_COMPLETEE
+  // Avis de sanction disciplinaire — lié à un étudiant précis (studentId) et à la sanction enregistrée
+  // (sanctionId), voir model Sanction (2026-08-03, retour du porteur du projet).
+  SANCTION
+  // Reçu de paiement et bulletin de paie — migrés du rendu window.print() (Module 4.3/Module 8) vers
+  // le moteur PDF centralisé le 2026-07-30. RECU_PAIEMENT/BULLETIN_SALAIRE passent du Tier 2
+  // (catalogue seul) au Tier 1 à cette occasion ; RECU/BULLETIN (génériques, Module 2) restent
+  // inchangés et non utilisés par cette migration.
+  RECU_PAIEMENT
+  BULLETIN_SALAIRE
+  // Fiche d'émargement mensuelle des enseignants — remplace le suivi numérique des séances/pointage
+  // (Module 5.1/5.2), abandonné (2026-08-03, retour du porteur du projet). Distincte de
+  // FICHE_EMARGEMENT (émargement étudiants d'une séance) déjà existante.
+  FICHE_EMARGEMENT_ENSEIGNANT
+  // Contrats de travail (Module Personnel, 2026-08-06, retour du porteur du projet) — l'établissement
+  // ne fonctionne qu'en CDD (jamais de CDI) : un pour le personnel administratif à salaire fixe (durée
+  // = une année scolaire), un pour les enseignants (durée = un module d'enseignement, sans période
+  // d'essai, renouvelable module par module), et un contrat de vacation (rémunération à l'heure, sans
+  // lien de subordination permanent). Remplace l'entrée CONTRAT_TRAVAIL (Tier 2, jamais implémentée).
+  CONTRAT_CDD_ADMINISTRATIF
+  CONTRAT_CDD_ENSEIGNANT
+  CONTRAT_VACATION
+  // Rapports financiers étudiants — retards de paiement et situation financière détaillée par
+  // filière/niveau/année/tranche (2026-08-09, retour du porteur du projet), réutilisant
+  // getStudentFeeSummary (Module 4.2/4.3) plutôt qu'un nouveau calcul de tarif indépendant.
+  RETARD_PAIEMENT
+  SITUATION_FINANCIERE
+
+  // Module 9 — Tier 2, catalogue seul (génération non implémentée dans cette livraison)
+  CARTE_PAIEMENT
+  ATTESTATION_FREQUENTATION
+  ATTESTATION_REUSSITE
+  ATTESTATION_STAGE
+  ATTESTATION_SALAIRE
+  DECISION_AFFECTATION
+  BULLETIN_NOTES
+  RELEVE_NOTES
+  RAPPORT_FINANCIER
+  PROCES_VERBAL
+  RAPPORT_STATISTIQUE
+}
+
+/// Cachet officiel — singleton.
+model OfficialStamp {
+  id                      String         @id @default(uuid())
+  imagePath               String?        @map("image_path")
+  widthMm                 Float?         @map("width_mm")
+  heightMm                Float?         @map("height_mm")
+  positionXMm             Float?         @map("position_x_mm")
+  positionYMm             Float?         @map("position_y_mm")
+  applicableDocumentTypes DocumentType[] @map("applicable_document_types")
+  updatedAt               DateTime       @updatedAt @map("updated_at")
+
+  @@map("official_stamp")
+}
+
+model AcademicYear {
+  id         String    @id @default(uuid())
+  label      String    @unique
+  startDate  DateTime  @map("start_date")
+  endDate    DateTime  @map("end_date")
+  isActive   Boolean   @default(false) @map("is_active")
+  isClosed   Boolean   @default(false) @map("is_closed")
+  closedAt   DateTime? @map("closed_at")
+  reopenedAt DateTime? @map("reopened_at")
+  reopenedBy String?   @map("reopened_by")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  reopenedByUser     User?               @relation(fields: [reopenedBy], references: [id], onDelete: SetNull)
+  periods            AcademicPeriod[]
+  classes            Class[]
+  enrollments        StudentEnrollment[]
+  feeTariffs         FeeTariff[]
+  feeReductions      FeeReduction[]
+  payments           Payment[]
+  subjectOfferings   SubjectOffering[]
+  bulletinsAnnuels   BulletinAnnuel[]
+  rattrapageSessions RattrapageSession[]
+
+  @@map("academic_years")
+}
+
+model AcademicPeriod {
+  id             String   @id @default(uuid())
+  academicYearId String   @map("academic_year_id")
+  code           String
+  label          String
+  startDate      DateTime @map("start_date")
+  endDate        DateTime @map("end_date")
+  orderIndex     Int      @map("order_index")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  academicYear     AcademicYear      @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
+  subjectOfferings SubjectOffering[]
+  bulletinsPeriode BulletinPeriode[]
+
+  @@unique([academicYearId, code])
+  @@map("academic_periods")
+}
+
+model Filiere {
+  id                String   @id @default(uuid())
+  code              String   @unique
+  name              String
+  description       String?
+  responsableUserId String?  @map("responsable_user_id")
+  duration          String?
+  isActive          Boolean  @default(true) @map("is_active")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  responsableUser    User?               @relation(fields: [responsableUserId], references: [id], onDelete: SetNull)
+  classes            Class[]
+  enrollments        StudentEnrollment[]
+  feeTariffs         FeeTariff[]
+  subjectOfferings   SubjectOffering[]
+  rattrapageSessions RattrapageSession[]
+
+  @@map("filieres")
+}
+
+model Level {
+  id         String   @id @default(uuid())
+  code       String   @unique
+  label      String
+  orderIndex Int      @map("order_index")
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  classes            Class[]
+  enrollments        StudentEnrollment[]
+  feeTariffs         FeeTariff[]
+  subjectOfferings   SubjectOffering[]
+  rattrapageSessions RattrapageSession[]
+
+  @@map("levels")
+}
+
+model Class {
+  id             String   @id @default(uuid())
+  code           String
+  name           String
+  filiereId      String   @map("filiere_id")
+  levelId        String   @map("level_id")
+  academicYearId String   @map("academic_year_id")
+  maxCapacity    Int?     @map("max_capacity")
+  mainRoom       String?  @map("main_room")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  filiere            Filiere             @relation(fields: [filiereId], references: [id], onDelete: Restrict)
+  level              Level               @relation(fields: [levelId], references: [id], onDelete: Restrict)
+  academicYear       AcademicYear        @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
+  enrollments        StudentEnrollment[]
+  feeTariffs         FeeTariff[]
+  teacherAssignments TeacherAssignment[]
+
+  pedagogicalGroupClasses         PedagogicalGroupClass[]
+  seanceRecurrenceTemplateClasses SeanceRecurrenceTemplateClass[]
+  seanceClasses                   SeanceClass[]
+
+  @@unique([code, academicYearId])
+  @@map("classes")
+}
+
+/// Devise — singleton.
+model CurrencySettings {
+  id                 String   @id @default(uuid())
+  currencyCode       String   @default("GNF") @map("currency_code")
+  amountFormat       String?  @map("amount_format")
+  thousandsSeparator String   @default(" ") @map("thousands_separator")
+  decimalCount       Int      @default(0) @map("decimal_count")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  @@map("currency_settings")
+}
+
+/// Paramètres régionaux — singleton.
+model RegionalSettings {
+  id             String   @id @default(uuid())
+  language       String   @default("fr")
+  timezone       String   @default("Africa/Conakry")
+  dateFormat     String   @default("dd/MM/yyyy") @map("date_format")
+  timeFormat     String   @default("HH:mm") @map("time_format")
+  firstDayOfWeek Int      @default(1) @map("first_day_of_week")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("regional_settings")
+}
+
+/// Personnalisation graphique — singleton, appliquée en direct côté client.
+model ThemeSettings {
+  id                  String   @id @default(uuid())
+  primaryColor        String?  @map("primary_color")
+  secondaryColor      String?  @map("secondary_color")
+  buttonColor         String?  @map("button_color")
+  menuColor           String?  @map("menu_color")
+  /// Couleur des fenêtres (extension du 2026-07-30, retour du porteur du projet) : fond de tous les
+  /// panneaux/cartes/boîtes de dialogue — distincte des zones de saisie et du contenu des tableaux,
+  /// qui restent toujours blancs quelle que soit cette valeur.
+  windowColor         String?  @map("window_color")
+  /// Couleurs par variante de bouton (extension du 2026-07-30, retour du porteur du projet) :
+  /// jusqu'ici success/destructive/warning étaient des tons sémantiques fixes (rouge/vert/orange),
+  /// volontairement non personnalisables — le porteur du projet a explicitement demandé à pouvoir
+  /// régler la couleur de chaque bouton individuellement, y compris ceux-ci.
+  destructiveColor    String?  @map("destructive_color")
+  successColor        String?  @map("success_color")
+  warningColor        String?  @map("warning_color")
+  fontFamily          String?  @map("font_family")
+  loginImagePath      String?  @map("login_image_path")
+  backgroundImagePath String?  @map("background_image_path")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  @@map("theme_settings")
+}
+
+/// Moteur de thèmes d'impression — singleton, source unique des couleurs de TOUS les documents
+/// imprimables (bulletin de paie, reçus, futurs certificats/attestations/factures...). Aucun
+/// document ne gère ses couleurs indépendamment : ils lisent tous ces valeurs.
+model PrintThemeSettings {
+  id                 String          @id @default(uuid())
+  presetLabel        String          @default("Noir administratif") @map("preset_label")
+  borderColor        String          @default("#000000") @map("border_color")
+  separatorColor     String          @default("#000000") @map("separator_color")
+  titleColor         String          @default("#000000") @map("title_color")
+  headerColor        String          @default("#000000") @map("header_color")
+  tableColor         String          @default("#000000") @map("table_color")
+  primaryTextColor   String          @default("#000000") @map("primary_text_color")
+  secondaryTextColor String          @default("#4B5563") @map("secondary_text_color")
+  boxColor           String          @default("#000000") @map("box_color")
+  totalColor         String          @default("#000000") @map("total_color")
+  netAmountColor     String          @default("#000000") @map("net_amount_color")
+  // Module 9 — extension pour le moteur PDF centralisé (voir MODULE-09 §2)
+  footerColor        String          @default("#4B5563") @map("footer_color")
+  borderWidthPt      Float           @default(1) @map("border_width_pt")
+  marginMm           Float           @default(15) @map("margin_mm")
+  paperFormat        PaperFormat     @default(A4) @map("paper_format")
+  orientation        PageOrientation @default(PORTRAIT)
+  updatedAt          DateTime        @updatedAt @map("updated_at")
+
+  @@map("print_theme_settings")
+}
+
+enum PaperFormat {
+  A4
+  LETTRE
+}
+
+enum PageOrientation {
+  PORTRAIT
+  PAYSAGE
+}
+
+model DocumentTemplate {
+  id                    String         @id @default(uuid())
+  documentType          DocumentType   @unique @map("document_type")
+  showLogoPrimary       Boolean        @default(true) @map("show_logo_primary")
+  showLogoSecondary     Boolean        @default(false) @map("show_logo_secondary")
+  showStamp             Boolean        @default(true) @map("show_stamp")
+  signatoryRoleCode     SignatoryRole? @map("signatory_role_code")
+  customFooterText      String?        @map("custom_footer_text")
+  // Module 9 — extension pour le moteur PDF centralisé (voir MODULE-09 §2)
+  showCampusLogo        Boolean        @default(false) @map("show_campus_logo")
+  showQrCode            Boolean        @default(true) @map("show_qr_code")
+  allowDoubleExemplaire Boolean        @default(false) @map("allow_double_exemplaire")
+  secondaryCopyLabel    String?        @map("secondary_copy_label")
+  updatedAt             DateTime       @updatedAt @map("updated_at")
+
+  signatory DocumentSignatory? @relation(fields: [signatoryRoleCode], references: [roleCode], onDelete: SetNull)
+
+  @@map("document_templates")
+}
+
+/// En-tête institutionnel — singleton, source unique du bloc République/devise/école/institut/slogan
+/// affiché en tête de tous les documents officiels générés par le moteur PDF (voir MODULE-09 §1.1).
+model InstitutionalHeaderSettings {
+  id                 String          @id @default(uuid())
+  republicLine       String          @default("RÉPUBLIQUE DE GUINÉE") @map("republic_line")
+  republicColor      String          @default("#000000") @map("republic_color")
+  mottoPart1         String          @default("Travail") @map("motto_part_1")
+  mottoPart1Color    String          @default("#CE1126") @map("motto_part_1_color")
+  mottoPart2         String          @default("Justice") @map("motto_part_2")
+  mottoPart2Color    String          @default("#FCD116") @map("motto_part_2_color")
+  mottoPart3         String          @default("Solidarité") @map("motto_part_3")
+  mottoPart3Color    String          @default("#009460") @map("motto_part_3_color")
+  schoolNameLine     String          @default("ÉCOLE DE COMMERCE ET DE GESTION ISAC") @map("school_name_line")
+  schoolNameColor    String          @default("#1E3A8A") @map("school_name_color")
+  schoolNameBold     Boolean         @default(true) @map("school_name_bold")
+  schoolNameFontSize Int             @default(14) @map("school_name_font_size")
+  instituteNameLine  String          @default("INSTITUT YOUNGOU MALIANNDO (I.Y.M.A.)") @map("institute_name_line")
+  instituteNameColor String          @default("#7F1D1D") @map("institute_name_color")
+  taglineLine        String          @default("« Votre avenir commence ici »") @map("tagline_line")
+  taglineColor       String          @default("#6B7280") @map("tagline_color")
+  taglineItalic      Boolean         @default(true) @map("tagline_italic")
+  fontFamily         String          @default("Helvetica") @map("font_family")
+  lineSpacing        Float           @default(1.2) @map("line_spacing")
+  alignment          HeaderAlignment @default(CENTER)
+  updatedAt          DateTime        @updatedAt @map("updated_at")
+
+  @@map("institutional_header_settings")
+}
+
+enum HeaderAlignment {
+  LEFT
+  CENTER
+  RIGHT
+}
+
+/// Document officiel généré et archivé par le moteur PDF centralisé (voir MODULE-09 §1.7-§1.8).
+/// `relatedEntityType`/`relatedEntityId` sont polymorphes et volontairement sans FK (mêmes raisons
+/// que CommunicationMessage.recipientId au Module 12 : la cible peut être un étudiant, un
+/// enseignant, une classe... sans imposer une table pivot supplémentaire).
+model GeneratedDocument {
+  id                String       @id @default(uuid())
+  documentType      DocumentType @map("document_type")
+  documentNumber    String       @unique @map("document_number")
+  relatedEntityType String?      @map("related_entity_type")
+  relatedEntityId   String?      @map("related_entity_id")
+  filePath          String       @map("file_path")
+  qrPayload         String?      @map("qr_payload")
+  doubleExemplaire  Boolean      @default(false) @map("double_exemplaire")
+  generatedByUserId String?      @map("generated_by_user_id")
+  generatedAt       DateTime     @default(now()) @map("generated_at")
+  createdAt         DateTime     @default(now()) @map("created_at")
+
+  generatedByUser User?        @relation(fields: [generatedByUserId], references: [id], onDelete: SetNull)
+  studentCard     StudentCard?
+
+  @@index([relatedEntityType, relatedEntityId])
+  @@index([documentType])
+  @@map("generated_documents")
+}
+
+// ---------------------------------------------------------------------------
+// Module 9.1 — Carte d'étudiant officielle (version définitive)
+// Voir docs/modules/MODULE-09.1-carte-etudiant.md. Contrairement aux autres
+// documents du Module 9 (journal d'archivage immuable), la carte est un objet
+// avec un cycle de vie (active/annulée/expirée/remplacée) — voir §2/§3.
+// ---------------------------------------------------------------------------
+
+enum StudentCardStatus {
+  ACTIVE
+  CANCELLED
+  EXPIRED
+  SUPERSEDED
+}
+
+/// Une seule carte ACTIVE par étudiant (index unique partiel ajouté en SQL brut dans la migration,
+/// même technique que les bulletins du Module 6 — voir MODULE-09.1 §2/§3 règle 1).
+model StudentCard {
+  id                  String            @id @default(uuid())
+  studentId           String            @map("student_id")
+  cardNumber          String            @unique @map("card_number")
+  verificationCode    String            @unique @map("verification_code")
+  qrPayload           String            @map("qr_payload")
+  status              StudentCardStatus @default(ACTIVE)
+  issuedAt            DateTime          @default(now()) @map("issued_at")
+  expiresAt           DateTime          @map("expires_at")
+  cancelledAt         DateTime?         @map("cancelled_at")
+  cancelledBy         String?           @map("cancelled_by")
+  cancelledReason     String?           @map("cancelled_reason")
+  supersededByCardId  String?           @unique @map("superseded_by_card_id")
+  filePath            String            @map("file_path")
+  generatedDocumentId String?           @unique @map("generated_document_id")
+  generatedByUserId   String?           @map("generated_by_user_id")
+  createdAt           DateTime          @default(now()) @map("created_at")
+
+  student           Student              @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  cancelledByUser   User?                @relation("StudentCardCancelledBy", fields: [cancelledBy], references: [id], onDelete: SetNull)
+  supersededByCard  StudentCard?         @relation("StudentCardSupersession", fields: [supersededByCardId], references: [id], onDelete: SetNull)
+  supersedesCard    StudentCard?         @relation("StudentCardSupersession")
+  generatedDocument GeneratedDocument?   @relation(fields: [generatedDocumentId], references: [id], onDelete: SetNull)
+  generatedByUser   User?                @relation("StudentCardGeneratedBy", fields: [generatedByUserId], references: [id], onDelete: SetNull)
+  reprints          StudentCardReprint[]
+
+  @@index([studentId])
+  @@map("student_cards")
+}
+
+/// Historique des réimpressions (MODULE-09.1 §"Sécurité") — une réimpression retélécharge
+/// strictement le PDF déjà archivé, ne consomme jamais un nouveau numéro (§6 point 6 validé).
+model StudentCardReprint {
+  id            String   @id @default(uuid())
+  studentCardId String   @map("student_card_id")
+  reprintedAt   DateTime @default(now()) @map("reprinted_at")
+  reprintedBy   String?  @map("reprinted_by")
+  reason        String?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  studentCard     StudentCard @relation(fields: [studentCardId], references: [id], onDelete: Cascade)
+  reprintedByUser User?       @relation(fields: [reprintedBy], references: [id], onDelete: SetNull)
+
+  @@index([studentCardId])
+  @@map("student_card_reprints")
+}
+
+/// Gabarit de la carte — singleton (MODULE-09.1 §2/§6 point 3 : mise en page fixe fidèle à la
+/// maquette validée, seuls le contenu et les couleurs sont personnalisables, jamais codés en dur).
+model StudentCardTemplate {
+  id                String   @id @default(uuid())
+  showGuineaStripes Boolean  @default(true) @map("show_guinea_stripes")
+  backgroundColor   String   @default("#FFFFFF") @map("background_color")
+  legalText         String   @default("Cette carte demeure la propriété de l'École de Commerce et de Gestion ISAC. En cas de perte, veuillez contacter immédiatement l'administration. Toute personne trouvant cette carte est priée de la déposer au secrétariat du campus ou d'appeler au numéro ci-dessus. Cette carte est valable pour l'année scolaire indiquée.") @map("legal_text")
+  personalUseText   String   @default("Cette carte est strictement personnelle et incessible.") @map("personal_use_text")
+  fontFamily        String   @default("Helvetica") @map("font_family")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@map("student_card_template")
+}
+
+// ---------------------------------------------------------------------------
+// Module 4 — Étudiants
+// Voir docs/modules/MODULE-04-etudiants.md pour l'analyse et les règles
+// métier détaillées. `students` et `student_enrollments` ne sont jamais
+// supprimés physiquement (archivage réversible uniquement, voir archivedAt).
+// ---------------------------------------------------------------------------
+
+enum Gender {
+  M
+  F
+}
+
+enum MaritalStatus {
+  CELIBATAIRE
+  MARIE
+  AUTRE
+}
+
+/// Type de programme (2026-08-03, retour du porteur du projet) — distinct de la filière : la
+/// filière est le domaine d'étude (ex. "Cuisine pâtisserie"), le programme est le type de diplôme
+/// préparé, indépendant de la filière.
+enum ProgrammeType {
+  DQP
+  CAP
+  BEP
+  BT
+  BTS
+}
+
+model Student {
+  id             String         @id @default(uuid())
+  matricule      String         @unique
+  /// Identifiant National (INA) — identifiant délivré par les autorités, distinct du matricule
+  /// interne (2026-08-03, retour du porteur du projet). Optionnel : rempli au fur et à mesure.
+  ina            String?        @unique
+  programme      ProgrammeType?
+  lastName       String         @map("last_name")
+  firstName      String         @map("first_name")
+  gender         Gender
+  birthDate      DateTime?      @map("birth_date")
+  birthPlace     String?        @map("birth_place")
+  nationality    String?
+  photoPath      String?        @map("photo_path")
+  address        String?
+  neighborhood   String?
+  commune        String?
+  city           String?
+  prefecture     String?
+  country        String?
+  phonePrimary   String?        @map("phone_primary")
+  phoneSecondary String?        @map("phone_secondary")
+  email          String?
+  maritalStatus  MaritalStatus  @default(CELIBATAIRE) @map("marital_status")
+  archivedAt     DateTime?      @map("archived_at")
+  archivedReason String?        @map("archived_reason")
+  archivedBy     String?        @map("archived_by")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  archivedByUser User? @relation(fields: [archivedBy], references: [id], onDelete: SetNull)
+
+  guardians        StudentGuardian[]
+  documents        StudentDocument[]
+  enrollments      StudentEnrollment[]
+  feeReductions    FeeReduction[]
+  payments         Payment[]
+  notes            Note[]
+  bulletinsPeriode BulletinPeriode[]
+  bulletinsAnnuels BulletinAnnuel[]
+  studentCards     StudentCard[]
+  sanctions        Sanction[]
+  absences         StudentAbsence[]
+  loansAsBorrower  Loan[]              @relation("LoanBorrowerStudent")
+  digitalDocumentSharesReceived DigitalDocumentShare[] @relation("DigitalDocumentShareRecipientStudent")
+  portalCredential PortalCredential?
+
+  @@index([lastName, firstName])
+  @@index([phonePrimary])
+  @@index([email])
+  @@map("students")
+}
+
+enum GuardianRelationship {
+  PERE
+  MERE
+  TUTEUR_LEGAL
+  FRERE
+  SOEUR
+  ONCLE
+  TANTE
+  GRAND_PARENT
+  AUTRE
+}
+
+model Guardian {
+  id             String   @id @default(uuid())
+  lastName       String   @map("last_name")
+  firstName      String   @map("first_name")
+  profession     String?
+  employer       String?
+  phonePrimary   String?  @map("phone_primary")
+  phoneSecondary String?  @map("phone_secondary")
+  whatsapp       String?
+  email          String?
+  address        String?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  students StudentGuardian[]
+  portalCredential PortalCredential?
+
+  @@map("guardians")
+}
+
+model StudentGuardian {
+  id                String               @id @default(uuid())
+  studentId         String               @map("student_id")
+  guardianId        String               @map("guardian_id")
+  relationship      GuardianRelationship
+  relationshipOther String?              @map("relationship_other")
+  isPrimaryContact  Boolean              @default(false) @map("is_primary_contact")
+  createdAt         DateTime             @default(now()) @map("created_at")
+  updatedAt         DateTime             @updatedAt @map("updated_at")
+
+  student  Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  guardian Guardian @relation(fields: [guardianId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, guardianId])
+  @@map("student_guardians")
+}
+
+enum StudentDocumentType {
+  ACTE_NAISSANCE
+  DIPLOME
+  RELEVE
+  PHOTO
+  CARTE_IDENTITE_PASSEPORT
+  CERTIFICAT_MEDICAL
+  AUTRE
+}
+
+model StudentDocument {
+  id            String              @id @default(uuid())
+  studentId     String              @map("student_id")
+  type          StudentDocumentType
+  label         String?
+  filePath      String              @map("file_path")
+  fileName      String              @map("file_name")
+  mimeType      String              @map("mime_type")
+  fileSizeBytes Int                 @map("file_size_bytes")
+  uploadedAt    DateTime            @default(now()) @map("uploaded_at")
+  uploadedBy    String?             @map("uploaded_by")
+  updatedAt     DateTime            @updatedAt @map("updated_at")
+
+  student        Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  uploadedByUser User?   @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
+
+  @@index([studentId])
+  @@map("student_documents")
+}
+
+enum SanctionType {
+  AVERTISSEMENT
+  BLAME
+  RETENUE
+  EXCLUSION_TEMPORAIRE
+  EXCLUSION_DEFINITIVE
+  AUTRE
+}
+
+/// Sanction disciplinaire d'un étudiant (2026-08-03, retour du porteur du projet) — enregistrement
+/// interne ; l'avis PDF officiel est généré séparément via le moteur centralisé (DocumentType.SANCTION,
+/// voir MODULE-09), qui porte sa propre numérotation (pas de `numeroDossier` dupliqué ici). Une
+/// notification automatique part au parent/tuteur principal et à l'étudiant dès l'enregistrement (voir
+/// NotificationEventType.SANCTION_ENREGISTREE).
+model Sanction {
+  id           String       @id @default(uuid())
+  studentId    String       @map("student_id")
+  type         SanctionType
+  motif        String
+  description  String?
+  dureeJours   Int?         @map("duree_jours")
+  date         DateTime
+  annule       Boolean      @default(false)
+  annuleReason String?      @map("annule_reason")
+  annuleBy     String?      @map("annule_by")
+  annuleLe     DateTime?    @map("annule_le")
+  issuedBy     String       @map("issued_by")
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+
+  student      Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  issuedByUser User    @relation("SanctionIssuedBy", fields: [issuedBy], references: [id], onDelete: Restrict)
+  annuleByUser User?   @relation("SanctionAnnuleBy", fields: [annuleBy], references: [id], onDelete: SetNull)
+
+  @@index([studentId])
+  @@map("sanctions")
+}
+
+/// Absence d'un étudiant pour un jour donné (2026-08-03, retour du porteur du projet) — pas de
+/// pointage quotidien : par défaut l'étudiant est présumé présent, seule une absence enregistrée
+/// explicitement (avec motif, justifiée ou non) apparaît ici. Alimente la mention de régularité du
+/// bulletin (voir EvaluationSettings.seuilAbsencesIrregulier, BulletinPeriode/BulletinAnnuel.regularite).
+model StudentAbsence {
+  id        String   @id @default(uuid())
+  studentId String   @map("student_id")
+  date      DateTime
+  motif     String
+  justifiee Boolean  @default(false)
+  createdBy String   @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  student       Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  createdByUser User    @relation("StudentAbsenceCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([studentId, date])
+  @@map("student_absences")
+}
+
+/// Session de rattrapage (2026-08-03, retour du porteur du projet, volet "Sessionnaires") —
+/// planification (date/heure/salle) d'une session de rattrapage pour une matière en échec au sein
+/// d'une filière/niveau/année. La liste des étudiants en échec n'est jamais stockée (recalculée à la
+/// demande depuis les notes, comme le classement par mérite — voir rattrapageService.ts) : seule
+/// cette planification a besoin d'être persistée, une session par (filière, niveau, année, matière).
+model RattrapageSession {
+  id             String   @id @default(uuid())
+  filiereId      String   @map("filiere_id")
+  levelId        String   @map("level_id")
+  academicYearId String   @map("academic_year_id")
+  subjectId      String   @map("subject_id")
+  sessionDate    DateTime @map("session_date")
+  startTime      String   @map("start_time")
+  endTime        String?  @map("end_time")
+  roomId         String?  @map("room_id")
+  createdBy      String   @map("created_by")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  filiere       Filiere      @relation(fields: [filiereId], references: [id], onDelete: Cascade)
+  level         Level        @relation(fields: [levelId], references: [id], onDelete: Cascade)
+  academicYear  AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
+  subject       Subject      @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  room          Room?        @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  createdByUser User         @relation("RattrapageSessionCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@unique([filiereId, levelId, academicYearId, subjectId], map: "rattrapage_sessions_scope_key")
+  @@index([academicYearId])
+  @@map("rattrapage_sessions")
+}
+
+enum EnrollmentStatus {
+  NOUVEAU
+  ANCIEN
+  REDOUBLANT
+  TRANSFERT
+  REPRISE
+}
+
+enum EnrollmentDecision {
+  EN_COURS
+  ADMIS
+  REDOUBLANT
+  AJOURNE
+  ABANDON
+}
+
+enum PaymentStatus {
+  NON_PAYE
+  PARTIELLEMENT_PAYE
+  TOTALEMENT_PAYE
+}
+
+model StudentEnrollment {
+  id             String             @id @default(uuid())
+  studentId      String             @map("student_id")
+  academicYearId String             @map("academic_year_id")
+  classId        String             @map("class_id")
+  filiereId      String             @map("filiere_id")
+  levelId        String             @map("level_id")
+  status         EnrollmentStatus   @default(NOUVEAU)
+  decision       EnrollmentDecision @default(EN_COURS)
+  annualAverage  Decimal?           @map("annual_average") @db.Decimal(4, 2)
+  mention        String?
+  enrollmentDate DateTime           @map("enrollment_date")
+
+  // Module 4.1 — Inscriptions et réinscriptions (extension additive, voir ADR-018/019/020)
+  regimeId           String?        @map("regime_id")
+  registrationNumber String?        @unique @map("registration_number")
+  feeAmountExpected  Decimal?       @map("fee_amount_expected") @db.Decimal(12, 2)
+  paymentStatus      PaymentStatus? @map("payment_status")
+  cancelledAt        DateTime?      @map("cancelled_at")
+  cancelledReason    String?        @map("cancelled_reason")
+  cancelledBy        String?        @map("cancelled_by")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  student         Student           @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  academicYear    AcademicYear      @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
+  class           Class             @relation(fields: [classId], references: [id], onDelete: Restrict)
+  filiere         Filiere           @relation(fields: [filiereId], references: [id], onDelete: Restrict)
+  level           Level             @relation(fields: [levelId], references: [id], onDelete: Restrict)
+  regime          EnrollmentRegime? @relation(fields: [regimeId], references: [id], onDelete: SetNull)
+  cancelledByUser User?             @relation("EnrollmentCancelledBy", fields: [cancelledBy], references: [id], onDelete: SetNull)
+  payments        Payment[]
+
+  @@unique([studentId, academicYearId])
+  @@index([academicYearId, classId])
+  @@map("student_enrollments")
+}
+
+enum NumberingPurpose {
+  MATRICULE
+  INSCRIPTION
+  RECU_PAIEMENT
+  ECRITURE_COMPTABLE
+  DEPENSE
+  ENSEIGNANT
+  EMPLOYE
+  BULLETIN_PERIODE
+  BULLETIN_ANNUEL
+  // Module 9 — Moteur centralisé de documents officiels (une série par type Tier 1, voir MODULE-09 §1.6)
+  CERTIFICAT_SCOLARITE
+  ATTESTATION_INSCRIPTION
+  CARTE_ETUDIANT
+  ATTESTATION_TRAVAIL
+  LISTE_ETUDIANTS
+  LISTE_ENSEIGNANTS
+  LISTE_CLASSES
+  FICHE_EMARGEMENT
+  EMPLOI_DU_TEMPS
+  HISTORIQUE_PAIEMENTS
+  // Extension du 2026-07-30 (retour du porteur du projet) — carte de paiement, même modèle que la
+  // carte d'étudiant (Module 9.1), sans cycle de vie propre.
+  CARTE_PAIEMENT
+  // Rapports comptables/de caisse — validés le 2026-07-30 (retour du porteur du projet), voir ADR-053.
+  GRAND_LIVRE_CAISSE
+  ETAT_RECETTES
+  RAPPORT_CAISSE
+  JOURNAL_CAISSE
+  SITUATION_CAISSE_JOURNALIERE
+  BILAN
+  // Fiche d'inscription et de réinscription — formulaire vierge, sans entité liée (2026-08-02).
+  FICHE_INSCRIPTION
+  // Fiche d'inscription complétée — version remplie, liée à un étudiant précis (2026-08-03).
+  FICHE_INSCRIPTION_COMPLETEE
+  // Avis de sanction disciplinaire (2026-08-03).
+  SANCTION
+  // Bulletin de paie — migré vers le moteur PDF centralisé le 2026-07-30 (voir DocumentType.BULLETIN_SALAIRE).
+  // RECU_PAIEMENT existe déjà ci-dessus (Module 4.3) : le reçu de paiement archivé par le moteur PDF
+  // réutilise ce même numéro (Payment.receiptNumber), pas une série séparée — voir documentEngineService.ts.
+  BULLETIN_SALAIRE
+  // Fiche d'émargement mensuelle des enseignants (2026-08-03) — remplace le suivi numérique du
+  // pointage, abandonné.
+  FICHE_EMARGEMENT_ENSEIGNANT
+  // Contrats de travail (2026-08-06) — voir DocumentType pour le contexte complet.
+  CONTRAT_CDD_ADMINISTRATIF
+  CONTRAT_CDD_ENSEIGNANT
+  CONTRAT_VACATION
+  // Numéro d'inventaire d'un bien (Module 14, 2026-08-06).
+  BIEN_INVENTAIRE
+  // Numéro d'inventaire d'un exemplaire de bibliothèque (Module 13, 2026-08-07).
+  EXEMPLAIRE_BIBLIOTHEQUE
+  // Rapports financiers étudiants — retards de paiement et situation financière détaillée par
+  // filière/niveau/année/tranche, réutilisant getStudentFeeSummary (Module 4.2/4.3), voir
+  // feeSummaryService.ts (2026-08-09, retour du porteur du projet).
+  RETARD_PAIEMENT
+  SITUATION_FINANCIERE
+}
+
+/// Compteur atomique (matricule ou numéro d'inscription — voir MODULE-04.1
+/// §2.3) : une ligne "GLOBAL" par purpose, ou une ligne par année
+/// universitaire si la politique de réinitialisation est ANNUEL.
+model StudentNumberSequence {
+  id         String           @id @default(uuid())
+  purpose    NumberingPurpose @default(MATRICULE)
+  scopeKey   String           @map("scope_key")
+  lastNumber Int              @default(0) @map("last_number")
+  updatedAt  DateTime         @updatedAt @map("updated_at")
+
+  @@unique([purpose, scopeKey])
+  @@map("student_number_sequences")
+}
+
+enum NumberingResetPolicy {
+  JAMAIS
+  ANNUEL
+}
+
+/// Gabarit de génération de numéro — une ligne par purpose (matricule,
+/// numéro d'inscription), voir MODULE-04.1 §2.3.
+model StudentNumberingSettings {
+  id             String               @id @default(uuid())
+  purpose        NumberingPurpose     @unique @default(MATRICULE)
+  template       String               @default("{FILIERE}-{COMPTEUR}-{SIGLE}-{AA}")
+  resetPolicy    NumberingResetPolicy @default(JAMAIS) @map("reset_policy")
+  counterPadding Int                  @default(0) @map("counter_padding")
+  updatedAt      DateTime             @updatedAt @map("updated_at")
+
+  @@map("student_numbering_settings")
+}
+
+// ---------------------------------------------------------------------------
+// Module 4.1 — Inscriptions et réinscriptions
+// Voir docs/modules/MODULE-04.1-inscriptions-reinscriptions.md pour
+// l'analyse et les règles métier détaillées. Étend student_enrollments
+// (ci-dessus) plutôt que de dupliquer l'historique académique du Module 4.
+// ---------------------------------------------------------------------------
+
+/// Régimes d'inscription — référentiel configurable (même esprit que Level).
+model EnrollmentRegime {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  label     String
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  enrollments StudentEnrollment[]
+
+  @@map("enrollment_regimes")
+}
+
+/// Réglages généraux des inscriptions — singleton.
+model EnrollmentSettings {
+  id                   String   @id @default(uuid())
+  enforceClassCapacity Boolean  @default(false) @map("enforce_class_capacity")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  @@map("enrollment_settings")
+}
+
+/// Documents requis pour valider une inscription — une ligne par type de
+/// document du Module 4, toutes désactivées par défaut (non bloquant).
+model EnrollmentDocumentRequirement {
+  id           String              @id @default(uuid())
+  documentType StudentDocumentType @unique @map("document_type")
+  isRequired   Boolean             @default(false) @map("is_required")
+  updatedAt    DateTime            @updatedAt @map("updated_at")
+
+  @@map("enrollment_document_requirements")
+}
+
+// ---------------------------------------------------------------------------
+// Module 4.2 — Gestion des frais de scolarité
+// Voir docs/modules/MODULE-04.2-frais-scolarite.md. Référentiel unique des
+// tarifs (consigne explicite du porteur du projet) : aucun autre module ne
+// doit dupliquer ces montants, uniquement les lire.
+// ---------------------------------------------------------------------------
+
+/// Types de frais — référentiel configurable (12 par défaut, extensible).
+model FeeType {
+  id               String   @id @default(uuid())
+  code             String   @unique
+  name             String
+  description      String?
+  isActive         Boolean  @default(true) @map("is_active")
+  // Module 7 — Comptabilité (extension additive, voir ADR-027) : compte de
+  // produits associé, utilisé pour générer automatiquement les écritures.
+  revenueAccountId String?  @map("revenue_account_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  revenueAccount     ChartAccount?       @relation(fields: [revenueAccountId], references: [id], onDelete: SetNull)
+  tariffs            FeeTariff[]
+  reductions         FeeReduction[]
+  paymentAllocations PaymentAllocation[]
+
+  @@map("fee_types")
+}
+
+/// Tarif : chaque dimension (filière/niveau/classe/statut) est optionnelle —
+/// le tarif le plus spécifique l'emporte à la résolution (voir MODULE-04.2 §1.3).
+model FeeTariff {
+  id                     String            @id @default(uuid())
+  feeTypeId              String            @map("fee_type_id")
+  academicYearId         String            @map("academic_year_id")
+  filiereId              String?           @map("filiere_id")
+  levelId                String?           @map("level_id")
+  classId                String?           @map("class_id")
+  targetEnrollmentStatus EnrollmentStatus? @map("target_enrollment_status")
+  amount                 Decimal           @db.Decimal(12, 2)
+  isActive               Boolean           @default(true) @map("is_active")
+  createdAt              DateTime          @default(now()) @map("created_at")
+  updatedAt              DateTime          @updatedAt @map("updated_at")
+
+  feeType      FeeType             @relation(fields: [feeTypeId], references: [id], onDelete: Restrict)
+  academicYear AcademicYear        @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
+  filiere      Filiere?            @relation(fields: [filiereId], references: [id], onDelete: Restrict)
+  level        Level?              @relation(fields: [levelId], references: [id], onDelete: Restrict)
+  class        Class?              @relation(fields: [classId], references: [id], onDelete: Restrict)
+  installments FeeInstallmentPlan?
+
+  @@index([feeTypeId, academicYearId])
+  @@map("fee_tariffs")
+}
+
+enum LatePenaltyType {
+  AUCUNE
+  MONTANT_FIXE
+  POURCENTAGE
+}
+
+/// Échéancier — au plus un plan par tarif.
+model FeeInstallmentPlan {
+  id               String          @id @default(uuid())
+  feeTariffId      String          @unique @map("fee_tariff_id")
+  installmentCount Int             @map("installment_count")
+  latePenaltyType  LatePenaltyType @default(AUCUNE) @map("late_penalty_type")
+  latePenaltyValue Decimal?        @map("late_penalty_value") @db.Decimal(12, 2)
+  gracePeriodDays  Int             @default(0) @map("grace_period_days")
+  createdAt        DateTime        @default(now()) @map("created_at")
+  updatedAt        DateTime        @updatedAt @map("updated_at")
+
+  feeTariff    FeeTariff        @relation(fields: [feeTariffId], references: [id], onDelete: Cascade)
+  installments FeeInstallment[]
+
+  @@map("fee_installment_plans")
+}
+
+model FeeInstallment {
+  id         String   @id @default(uuid())
+  planId     String   @map("plan_id")
+  orderIndex Int      @map("order_index")
+  label      String?
+  dueDate    DateTime @map("due_date")
+  amount     Decimal  @db.Decimal(12, 2)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  plan               FeeInstallmentPlan  @relation(fields: [planId], references: [id], onDelete: Cascade)
+  paymentAllocations PaymentAllocation[]
+
+  @@unique([planId, orderIndex])
+  @@map("fee_installments")
+}
+
+enum FeeReductionType {
+  BOURSE
+  REMISE
+  EXONERATION_PARTIELLE
+  EXONERATION_TOTALE
+  EXCEPTIONNELLE
+}
+
+enum FeeReductionValueMode {
+  MONTANT
+  POURCENTAGE
+}
+
+/// Bourse/remise/exonération accordée à un étudiant — jamais supprimée physiquement.
+model FeeReduction {
+  id                 String                @id @default(uuid())
+  studentId          String                @map("student_id")
+  feeTypeId          String?               @map("fee_type_id")
+  academicYearId     String                @map("academic_year_id")
+  type               FeeReductionType
+  valueMode          FeeReductionValueMode @map("value_mode")
+  value              Decimal               @db.Decimal(12, 2)
+  reason             String
+  grantedByAuthority String                @map("granted_by_authority")
+  recordedBy         String?               @map("recorded_by")
+  validFrom          DateTime              @map("valid_from")
+  validTo            DateTime?             @map("valid_to")
+  createdAt          DateTime              @default(now()) @map("created_at")
+  updatedAt          DateTime              @updatedAt @map("updated_at")
+
+  student        Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  feeType        FeeType?     @relation(fields: [feeTypeId], references: [id], onDelete: SetNull)
+  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
+  recordedByUser User?        @relation(fields: [recordedBy], references: [id], onDelete: SetNull)
+
+  @@index([studentId, academicYearId])
+  @@map("fee_reductions")
+}
+
+// ---------------------------------------------------------------------------
+// Module 4.3 — Paiements et gestion de la caisse
+// Voir docs/modules/MODULE-04.3-paiements-caisse.md. Lit les tarifs/réductions
+// du Module 4.2 sans jamais les redéfinir ; devient à son tour la référence
+// des montants réellement payés.
+// ---------------------------------------------------------------------------
+
+/// Modes de règlement — référentiel configurable (5 modes système non
+/// supprimables + modes personnalisés), voir MODULE-04.3 §1.3.
+model PaymentMethod {
+  id              String   @id @default(uuid())
+  code            String   @unique
+  label           String
+  isSystem        Boolean  @default(false) @map("is_system")
+  isActive        Boolean  @default(true) @map("is_active")
+  // Module 7 — Comptabilité (extension additive, voir ADR-027) : compte de
+  // trésorerie associé, utilisé pour générer automatiquement les écritures.
+  linkedAccountId String?  @map("linked_account_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  linkedAccount ChartAccount? @relation(fields: [linkedAccountId], references: [id], onDelete: SetNull)
+  payments      Payment[]
+  expenses      Expense[]
+  payrollLines  PayrollLine[]
+
+  @@map("payment_methods")
+}
+
+/// Caisses physiques/postes d'encaissement — référentiel configurable.
+model CashRegister {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  name      String
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  sessions CashRegisterSession[]
+
+  @@map("cash_registers")
+}
+
+enum CashSessionStatus {
+  OUVERTE
+  FERMEE
+}
+
+/// Une ouverture → fermeture de caisse = une ligne. Figée une fois fermée
+/// (voir MODULE-04.3 §1.6/§3 règle 5) : jamais recalculée a posteriori.
+model CashRegisterSession {
+  id                     String            @id @default(uuid())
+  cashRegisterId         String            @map("cash_register_id")
+  openedBy               String            @map("opened_by")
+  openedAt               DateTime          @default(now()) @map("opened_at")
+  openingBalance         Decimal           @map("opening_balance") @db.Decimal(12, 2)
+  closedBy               String?           @map("closed_by")
+  closedAt               DateTime?         @map("closed_at")
+  closingBalanceDeclared Decimal?          @map("closing_balance_declared") @db.Decimal(12, 2)
+  closingBalanceComputed Decimal?          @map("closing_balance_computed") @db.Decimal(12, 2)
+  variance               Decimal?          @db.Decimal(12, 2)
+  status                 CashSessionStatus @default(OUVERTE)
+  notes                  String?
+  createdAt              DateTime          @default(now()) @map("created_at")
+  updatedAt              DateTime          @updatedAt @map("updated_at")
+
+  cashRegister CashRegister @relation(fields: [cashRegisterId], references: [id], onDelete: Restrict)
+  openedByUser User         @relation("CashSessionOpenedBy", fields: [openedBy], references: [id], onDelete: Restrict)
+  closedByUser User?        @relation("CashSessionClosedBy", fields: [closedBy], references: [id], onDelete: SetNull)
+  payments     Payment[]
+  expenses     Expense[]
+
+  @@index([cashRegisterId, status])
+  @@map("cash_register_sessions")
+}
+
+enum PaymentTransactionStatus {
+  VALIDE
+  ANNULE
+}
+
+/// Opération d'encaissement — la répartition entre types de frais/échéances
+/// est portée par PaymentAllocation (voir MODULE-04.3 §1.4).
+model Payment {
+  id                    String                   @id @default(uuid())
+  receiptNumber         String                   @unique @map("receipt_number")
+  studentId             String                   @map("student_id")
+  enrollmentId          String                   @map("enrollment_id")
+  academicYearId        String                   @map("academic_year_id")
+  cashRegisterSessionId String                   @map("cash_register_session_id")
+  paymentMethodId       String                   @map("payment_method_id")
+  amount                Decimal                  @db.Decimal(12, 2)
+  recordedBy            String                   @map("recorded_by")
+  status                PaymentTransactionStatus @default(VALIDE)
+  cancelledAt           DateTime?                @map("cancelled_at")
+  cancelledReason       String?                  @map("cancelled_reason")
+  cancelledBy           String?                  @map("cancelled_by")
+  verificationCode      String                   @unique @map("verification_code")
+  externalReference     String?                  @map("external_reference")
+  createdAt             DateTime                 @default(now()) @map("created_at")
+  updatedAt             DateTime                 @updatedAt @map("updated_at")
+
+  student             Student             @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  enrollment          StudentEnrollment   @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
+  academicYear        AcademicYear        @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
+  cashRegisterSession CashRegisterSession @relation(fields: [cashRegisterSessionId], references: [id], onDelete: Restrict)
+  paymentMethod       PaymentMethod       @relation(fields: [paymentMethodId], references: [id], onDelete: Restrict)
+  recordedByUser      User                @relation("PaymentRecordedBy", fields: [recordedBy], references: [id], onDelete: Restrict)
+  cancelledByUser     User?               @relation("PaymentCancelledBy", fields: [cancelledBy], references: [id], onDelete: SetNull)
+  allocations         PaymentAllocation[]
+
+  @@index([studentId, academicYearId])
+  @@index([cashRegisterSessionId])
+  @@map("payments")
+}
+
+/// Répartition d'un paiement entre types de frais / échéances — la somme des
+/// lignes doit égaler payments.amount (contrainte applicative, voir MODULE-04.3 §3 règle 4).
+model PaymentAllocation {
+  id               String   @id @default(uuid())
+  paymentId        String   @map("payment_id")
+  feeTypeId        String   @map("fee_type_id")
+  feeInstallmentId String?  @map("fee_installment_id")
+  amount           Decimal  @db.Decimal(12, 2)
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  payment        Payment         @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  feeType        FeeType         @relation(fields: [feeTypeId], references: [id], onDelete: Restrict)
+  feeInstallment FeeInstallment? @relation(fields: [feeInstallmentId], references: [id], onDelete: SetNull)
+
+  @@index([paymentId])
+  @@index([feeTypeId])
+  @@map("payment_allocations")
+}
+
+// ---------------------------------------------------------------------------
+// Module 7 — Comptabilité générale et gestion financière
+// Voir docs/modules/MODULE-07-comptabilite.md. Comptabilité en partie double
+// (chart_accounts/journal_entries/journal_entry_lines) ; génère
+// automatiquement ses écritures depuis les Modules 4.2/4.3 sans jamais
+// dupliquer leurs données (voir ADR-027 à 030).
+// ---------------------------------------------------------------------------
+
+enum AccountType {
+  ACTIF
+  PASSIF
+  TRESORERIE
+  CHARGE
+  PRODUIT
+  // Extension du 2026-07-30 (retour du porteur du projet) — nécessaire pour un Bilan correct
+  // (Actif = Passif + Capitaux propres) ; les comptes de capitaux propres étaient jusqu'ici
+  // indiscernables des comptes de passif.
+  CAPITAUX_PROPRES
+}
+
+/// Plan comptable — référentiel configurable (voir MODULE-07 §1.7).
+model ChartAccount {
+  id        String      @id @default(uuid())
+  code      String      @unique
+  label     String
+  type      AccountType
+  isActive  Boolean     @default(true) @map("is_active")
+  createdAt DateTime    @default(now()) @map("created_at")
+  updatedAt DateTime    @updatedAt @map("updated_at")
+
+  paymentMethods    PaymentMethod[]
+  feeTypes          FeeType[]
+  expenseCategories ExpenseCategory[]
+  journalEntryLines JournalEntryLine[]
+  payrollSettings   PayrollSettings[]
+
+  @@map("chart_accounts")
+}
+
+/// Verrouillage de périodes comptables (année/mois calendaires) — MODULE-07 §1.5.
+model AccountingPeriod {
+  id       String    @id @default(uuid())
+  year     Int
+  month    Int
+  isLocked Boolean   @default(false) @map("is_locked")
+  lockedAt DateTime? @map("locked_at")
+  lockedBy String?   @map("locked_by")
+
+  lockedByUser User? @relation(fields: [lockedBy], references: [id], onDelete: SetNull)
+
+  @@unique([year, month])
+  @@map("accounting_periods")
+}
+
+enum JournalEntryStatus {
+  VALIDEE
+  ANNULEE
+}
+
+/// Écriture comptable (en-tête) — jamais supprimée, seulement contre-passée (voir MODULE-07 §1.6/§3 règle 3).
+model JournalEntry {
+  id              String             @id @default(uuid())
+  entryNumber     String             @unique @map("entry_number")
+  entryDate       DateTime           @map("entry_date")
+  label           String
+  sourceModule    String             @map("source_module")
+  sourceType      String?            @map("source_type")
+  sourceId        String?            @map("source_id")
+  status          JournalEntryStatus @default(VALIDEE)
+  reversalOfId    String?            @unique @map("reversal_of_id")
+  createdBy       String             @map("created_by")
+  cancelledAt     DateTime?          @map("cancelled_at")
+  cancelledReason String?            @map("cancelled_reason")
+  cancelledBy     String?            @map("cancelled_by")
+  createdAt       DateTime           @default(now()) @map("created_at")
+  updatedAt       DateTime           @updatedAt @map("updated_at")
+
+  reversalOf      JournalEntry?      @relation("EntryReversal", fields: [reversalOfId], references: [id], onDelete: SetNull)
+  reversedBy      JournalEntry?      @relation("EntryReversal")
+  createdByUser   User               @relation("JournalEntryCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  cancelledByUser User?              @relation("JournalEntryCancelledBy", fields: [cancelledBy], references: [id], onDelete: SetNull)
+  lines           JournalEntryLine[]
+  expense         Expense?
+
+  @@index([entryDate])
+  @@index([sourceType, sourceId])
+  @@map("journal_entries")
+}
+
+/// Ligne débit/crédit — la somme des lignes d'une écriture doit être équilibrée (voir MODULE-07 §3 règle 1).
+model JournalEntryLine {
+  id             String   @id @default(uuid())
+  journalEntryId String   @map("journal_entry_id")
+  accountId      String   @map("account_id")
+  debit          Decimal  @default(0) @db.Decimal(14, 2)
+  credit         Decimal  @default(0) @db.Decimal(14, 2)
+  label          String?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  journalEntry JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  account      ChartAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@index([journalEntryId])
+  @@index([accountId])
+  @@map("journal_entry_lines")
+}
+
+/// Catégories de dépenses — référentiel configurable (même esprit que FeeType).
+model ExpenseCategory {
+  id               String   @id @default(uuid())
+  code             String   @unique
+  name             String
+  defaultAccountId String?  @map("default_account_id")
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  defaultAccount ChartAccount? @relation(fields: [defaultAccountId], references: [id], onDelete: SetNull)
+  expenses       Expense[]
+  budgetLines    BudgetLine[]
+
+  @@map("expense_categories")
+}
+
+/// Fournisseurs (MODULE-07 §1.8).
+model Supplier {
+  id            String   @id @default(uuid())
+  code          String   @unique
+  name          String
+  address       String?
+  phone         String?
+  email         String?
+  contactPerson String?  @map("contact_person")
+  category      String?
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  expenses Expense[]
+
+  @@map("suppliers")
+}
+
+enum ExpenseStatus {
+  BROUILLON
+  EN_ATTENTE_APPROBATION
+  APPROUVEE
+  REJETEE
+  ANNULEE
+}
+
+/// Dépense — l'écriture comptable n'est générée qu'à l'approbation (voir MODULE-07 §1.3/§3 règle 5).
+model Expense {
+  id                    String        @id @default(uuid())
+  expenseNumber         String        @unique @map("expense_number")
+  date                  DateTime
+  label                 String
+  categoryId            String        @map("category_id")
+  supplierId            String?       @map("supplier_id")
+  amount                Decimal       @db.Decimal(12, 2)
+  paymentMethodId       String        @map("payment_method_id")
+  // Extension du 2026-07-30 (retour du porteur du projet) — permet d'attribuer une sortie d'argent à
+  // une caisse/session précise (nécessaire pour le journal/la situation de caisse par caisse physique) ;
+  // reste facultatif car une dépense n'est pas toujours payée depuis une caisse (virement, etc.).
+  cashRegisterSessionId String?       @map("cash_register_session_id")
+  responsibleUserId     String        @map("responsible_user_id")
+  observations          String?
+  status                ExpenseStatus @default(BROUILLON)
+  approvedBy            String?       @map("approved_by")
+  approvedAt            DateTime?     @map("approved_at")
+  rejectedReason        String?       @map("rejected_reason")
+  journalEntryId        String?       @unique @map("journal_entry_id")
+  createdBy             String        @map("created_by")
+  createdAt             DateTime      @default(now()) @map("created_at")
+  updatedAt             DateTime      @updatedAt @map("updated_at")
+
+  category            ExpenseCategory      @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  supplier            Supplier?            @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  paymentMethod       PaymentMethod        @relation(fields: [paymentMethodId], references: [id], onDelete: Restrict)
+  cashRegisterSession CashRegisterSession? @relation(fields: [cashRegisterSessionId], references: [id], onDelete: SetNull)
+  responsibleUser     User                 @relation("ExpenseResponsible", fields: [responsibleUserId], references: [id], onDelete: Restrict)
+  approvedByUser      User?                @relation("ExpenseApprovedBy", fields: [approvedBy], references: [id], onDelete: SetNull)
+  createdByUser       User                 @relation("ExpenseCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  journalEntry        JournalEntry?        @relation(fields: [journalEntryId], references: [id], onDelete: SetNull)
+  documents           ExpenseDocument[]
+
+  @@index([categoryId, date])
+  @@index([supplierId])
+  @@index([cashRegisterSessionId])
+  @@map("expenses")
+}
+
+enum ExpenseDocumentType {
+  FACTURE
+  DEVIS
+  RECU
+  CONTRAT
+  AUTRE
+}
+
+/// Pièces justificatives d'une dépense (même esprit que StudentDocument) — MODULE-07 §1.10.
+model ExpenseDocument {
+  id            String              @id @default(uuid())
+  expenseId     String              @map("expense_id")
+  documentType  ExpenseDocumentType @map("document_type")
+  filePath      String              @map("file_path")
+  fileName      String              @map("file_name")
+  mimeType      String              @map("mime_type")
+  fileSizeBytes Int                 @map("file_size_bytes")
+  uploadedBy    String?             @map("uploaded_by")
+  createdAt     DateTime            @default(now()) @map("created_at")
+
+  expense        Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  uploadedByUser User?   @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
+
+  @@index([expenseId])
+  @@map("expense_documents")
+}
+
+/// Budget annuel (année civile — distincte de l'année universitaire) — MODULE-07 §1.9.
+model Budget {
+  id        String   @id @default(uuid())
+  year      Int      @unique
+  label     String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  lines BudgetLine[]
+
+  @@map("budgets")
+}
+
+/// Répartition du budget par catégorie de dépense — écart réalisé calculé à la volée, jamais stocké.
+model BudgetLine {
+  id              String   @id @default(uuid())
+  budgetId        String   @map("budget_id")
+  categoryId      String   @map("category_id")
+  allocatedAmount Decimal  @map("allocated_amount") @db.Decimal(14, 2)
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  budget   Budget          @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  category ExpenseCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  @@unique([budgetId, categoryId])
+  @@map("budget_lines")
+}
+
+// ---------------------------------------------------------------------------
+// Module 2.1 — Structure pédagogique (matières, unités d'enseignement)
+// Voir docs/modules/MODULE-02.1-structure-pedagogique.md. Étend le Module 2
+// (années/semestres/filières/niveaux/classes, inchangés) — ne les redéfinit
+// jamais. Réutilise le modèle de spécificité déjà validé pour les tarifs du
+// Module 4.2 (subjects/subject_offerings ~ FeeType/FeeTariff, voir ADR-022).
+// ---------------------------------------------------------------------------
+
+/// Matière — identité partagée, réutilisable par plusieurs filières (voir MODULE-02.1 §1.2).
+model Subject {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  name        String
+  description String?
+  credits     Decimal? @db.Decimal(4, 1)
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  offerings          SubjectOffering[]
+  rattrapageSessions RattrapageSession[]
+
+  @@map("subjects")
+}
+
+/// Unité d'enseignement (UE) — total des crédits jamais stocké, toujours calculé depuis ses subject_offerings.
+model TeachingUnit {
+  id                String   @id @default(uuid())
+  code              String   @unique
+  name              String
+  description       String?
+  responsibleUserId String?  @map("responsible_user_id")
+  isActive          Boolean  @default(true) @map("is_active")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  responsibleUser User?             @relation(fields: [responsibleUserId], references: [id], onDelete: SetNull)
+  offerings       SubjectOffering[]
+
+  @@map("teaching_units")
+}
+
+/// Affectation d'une matière à un contexte (année/semestre/niveau/filière optionnelle) — coefficient,
+/// volumes horaires, caractère obligatoire (voir MODULE-02.1 §1.2/§3 règle 1-2). Filière nullable =
+/// commune à toutes les filières de ce niveau ; pas de contrainte unique stricte en base sur la portée
+/// (même limite PostgreSQL que FeeTariff — NULL n'est jamais égal à NULL), contrôle du doublon côté service.
+model SubjectOffering {
+  id                String   @id @default(uuid())
+  subjectId         String   @map("subject_id")
+  academicYearId    String   @map("academic_year_id")
+  periodId          String   @map("period_id")
+  levelId           String   @map("level_id")
+  filiereId         String?  @map("filiere_id")
+  teachingUnitId    String?  @map("teaching_unit_id")
+  coefficient       Decimal  @db.Decimal(4, 2)
+  hoursCourse       Int      @default(0) @map("hours_course")
+  hoursTd           Int      @default(0) @map("hours_td")
+  hoursTp           Int      @default(0) @map("hours_tp")
+  hoursPersonalWork Int      @default(0) @map("hours_personal_work")
+  isRequired        Boolean  @default(true) @map("is_required")
+  isActive          Boolean  @default(true) @map("is_active")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  subject      Subject        @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  academicYear AcademicYear   @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
+  period       AcademicPeriod @relation(fields: [periodId], references: [id], onDelete: Restrict)
+  level        Level          @relation(fields: [levelId], references: [id], onDelete: Restrict)
+  filiere      Filiere?       @relation(fields: [filiereId], references: [id], onDelete: Restrict)
+  teachingUnit TeachingUnit?  @relation(fields: [teachingUnitId], references: [id], onDelete: SetNull)
+
+  teacherAssignments TeacherAssignment[]
+  notes              Note[]
+
+  seances                   Seance[]
+  seanceRecurrenceTemplates SeanceRecurrenceTemplate[]
+
+  @@index([academicYearId, periodId, levelId])
+  @@index([subjectId])
+  @@map("subject_offerings")
+}
+
+// ---------------------------------------------------------------------------
+// Module 5 — Gestion des enseignants
+// Voir docs/modules/MODULE-05-gestion-enseignants.md pour l'analyse et les
+// règles métier détaillées derrière ce schéma. Enseignant = entité autonome,
+// pas un compte User. Affectations pédagogiques réutilisant SubjectOffering
+// (Module 2.1) plutôt que de dupliquer matière/année/semestre/niveau/filière.
+// ---------------------------------------------------------------------------
+
+/// Référentiel configurable (Permanent/Vacataire/Contractuel/Visiteur, extensible) — voir MODULE-05 §1.6.
+model TeacherStatus {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  label     String
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  teachers Teacher[]
+
+  @@map("teacher_statuses")
+}
+
+/// Référentiel configurable (CDI/CDD/Vacation/Prestation, extensible) — voir MODULE-05 §1.6.
+model TeacherContractType {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  label     String
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  teachers  Teacher[]
+  employees Employee[]
+
+  @@map("teacher_contract_types")
+}
+
+/// Fiche enseignant — entité autonome, pas un compte User (voir MODULE-05 §1.1).
+/// Suppression toujours logique (archivage réversible), jamais physique.
+model Teacher {
+  id                  String    @id @default(uuid())
+  matricule           String    @unique
+  lastName            String    @map("last_name")
+  firstName           String    @map("first_name")
+  gender              Gender
+  birthDate           DateTime? @map("birth_date")
+  birthPlace          String?   @map("birth_place")
+  nationality         String?
+  /// Pièce d'identité (2026-08-06) — nécessaire pour les contrats de travail (Module Personnel).
+  idNumber            String?   @map("id_number")
+  photoPath           String?   @map("photo_path")
+  address             String?
+  city                String?
+  phonePrimary        String?   @map("phone_primary")
+  phoneSecondary      String?   @map("phone_secondary")
+  whatsapp            String?
+  email               String?
+  highestDegree       String?   @map("highest_degree")
+  academicGrade       String?   @map("academic_grade")
+  specialty           String?
+  function            String?
+  hireDate            DateTime? @map("hire_date")
+  contractTypeId      String?   @map("contract_type_id")
+  statusId            String?   @map("status_id")
+  weeklyHoursCapacity Decimal?  @map("weekly_hours_capacity") @db.Decimal(5, 2)
+  archivedAt          DateTime? @map("archived_at")
+  archivedReason      String?   @map("archived_reason")
+  archivedBy          String?   @map("archived_by")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  contractType   TeacherContractType? @relation(fields: [contractTypeId], references: [id], onDelete: SetNull)
+  status         TeacherStatus?       @relation(fields: [statusId], references: [id], onDelete: SetNull)
+  archivedByUser User?                @relation(fields: [archivedBy], references: [id], onDelete: SetNull)
+
+  assignments         TeacherAssignment[]
+  weeklyAvailability  TeacherWeeklyAvailability[]
+  leaves              TeacherLeave[]
+  trainings           TeacherTraining[]
+  documents           TeacherDocument[]
+  employee            Employee?
+  monthlyTimesheets   TeacherMonthlyTimesheet[]
+  seances             Seance[]
+  substituteSeances   Seance[]                    @relation("SubstituteTeacherSeances")
+  recurrenceTemplates SeanceRecurrenceTemplate[]
+  assetsResponsibleFor Asset[]                    @relation("AssetResponsibleTeacher")
+  loansAsBorrower     Loan[]                       @relation("LoanBorrowerTeacher")
+  digitalDocumentSharesReceived DigitalDocumentShare[] @relation("DigitalDocumentShareRecipientTeacher")
+  portalCredential    PortalCredential?
+
+  @@index([lastName, firstName])
+  @@index([phonePrimary])
+  @@map("teachers")
+}
+
+/// Affectation pédagogique — table de liaison, jamais supprimée physiquement (voir MODULE-05 §1.2/§3 règle 1-2).
+/// La charge horaire de l'affectation (hours_course + hours_td + hours_tp) vit sur SubjectOffering,
+/// jamais dupliquée ici. N'est plus référencée par Seance depuis le Module 5.2 (une séance référence
+/// directement teacher+subjectOffering et ses propres classes, pour supporter nativement les cours
+/// mutualisés) — reste la déclaration d'affectation utilisée pour la charge horaire (MODULE-05 §1.3).
+model TeacherAssignment {
+  id                String   @id @default(uuid())
+  teacherId         String   @map("teacher_id")
+  subjectOfferingId String   @map("subject_offering_id")
+  classId           String   @map("class_id")
+  isActive          Boolean  @default(true) @map("is_active")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  teacher         Teacher         @relation(fields: [teacherId], references: [id], onDelete: Restrict)
+  subjectOffering SubjectOffering @relation(fields: [subjectOfferingId], references: [id], onDelete: Restrict)
+  class           Class           @relation(fields: [classId], references: [id], onDelete: Restrict)
+
+  @@unique([teacherId, subjectOfferingId, classId])
+  @@index([teacherId])
+  @@map("teacher_assignments")
+}
+
+enum DayOfWeek {
+  LUNDI
+  MARDI
+  MERCREDI
+  JEUDI
+  VENDREDI
+  SAMEDI
+  DIMANCHE
+}
+
+/// Créneau hebdomadaire récurrent de disponibilité — voir MODULE-05 §1.4.
+model TeacherWeeklyAvailability {
+  id        String    @id @default(uuid())
+  teacherId String    @map("teacher_id")
+  dayOfWeek DayOfWeek @map("day_of_week")
+  startTime String    @map("start_time")
+  endTime   String    @map("end_time")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  teacher Teacher @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+
+  @@index([teacherId])
+  @@map("teacher_weekly_availabilities")
+}
+
+/// Indisponibilité ponctuelle / congé — datée, non récurrente (voir MODULE-05 §1.4).
+model TeacherLeave {
+  id        String   @id @default(uuid())
+  teacherId String   @map("teacher_id")
+  startDate DateTime @map("start_date")
+  endDate   DateTime @map("end_date")
+  reason    String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  teacher Teacher @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+
+  @@index([teacherId])
+  @@map("teacher_leaves")
+}
+
+/// Formation suivie — donnée structurée, distincte d'un simple changement journalisé dans audit_log
+/// (voir MODULE-05 §1.5).
+model TeacherTraining {
+  id              String    @id @default(uuid())
+  teacherId       String    @map("teacher_id")
+  title           String
+  institution     String?
+  startDate       DateTime  @map("start_date")
+  endDate         DateTime? @map("end_date")
+  certificatePath String?   @map("certificate_path")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  teacher Teacher @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+
+  @@index([teacherId])
+  @@map("teacher_trainings")
+}
+
+enum TeacherDocumentType {
+  DIPLOME
+  CV
+  CONTRAT
+  EVALUATION
+  CARTE_IDENTITE_PASSEPORT
+  AUTRE
+}
+
+/// Dossier numérique de l'enseignant — même modèle que StudentDocument (Module 4).
+model TeacherDocument {
+  id            String              @id @default(uuid())
+  teacherId     String              @map("teacher_id")
+  type          TeacherDocumentType
+  label         String?
+  filePath      String              @map("file_path")
+  fileName      String              @map("file_name")
+  mimeType      String              @map("mime_type")
+  fileSizeBytes Int                 @map("file_size_bytes")
+  uploadedBy    String?             @map("uploaded_by")
+  createdAt     DateTime            @default(now()) @map("created_at")
+  updatedAt     DateTime            @updatedAt @map("updated_at")
+
+  teacher        Teacher @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  uploadedByUser User?   @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
+
+  @@index([teacherId])
+  @@map("teacher_documents")
+}
+
+// ---------------------------------------------------------------------------
+// Module 5.2 — Emploi du temps et pointage pédagogique
+// Voir docs/modules/MODULE-05.2-emploi-du-temps.md pour l'analyse et les
+// points ouverts validés derrière ce schéma. Révise en profondeur le Module
+// 5.1 (voir §0.2 du document) : remplace teacher_weekly_slots et la
+// génération synthétique de teacher_attendance_sessions par une entité
+// Séance de premier ordre, capable de couvrir nativement 1 à N classes
+// (cours mutualisés/tronc commun), sans jamais multiplier les heures/le
+// montant par le nombre de classes (§1.11, règle non négociable). Teacher
+// reste une fiche autonome sans compte de connexion (voir MODULE-05 §1.1),
+// l'auto-validation par l'enseignant n'est donc pas possible.
+// ---------------------------------------------------------------------------
+
+/// Salle — référentiel minimal (voir MODULE-05.2 §1.7). Remplace à terme Class.mainRoom (texte libre).
+model Room {
+  id        String   @id @default(uuid())
+  label     String   @unique
+  capacity  Int?
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  seances             Seance[]
+  recurrenceTemplates SeanceRecurrenceTemplate[]
+  rattrapageSessions  RattrapageSession[]
+
+  @@map("rooms")
+}
+
+/// Groupe pédagogique — raccourci de saisie pour les cours mutualisés/tronc commun (voir MODULE-05.2 §1.6).
+/// Ne contraint jamais une séance après création : les classes d'une séance restent modifiables au cas par cas.
+model PedagogicalGroup {
+  id        String   @id @default(uuid())
+  label     String
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  classes             PedagogicalGroupClass[]
+  recurrenceTemplates SeanceRecurrenceTemplate[]
+
+  @@map("pedagogical_groups")
+}
+
+model PedagogicalGroupClass {
+  pedagogicalGroupId String @map("pedagogical_group_id")
+  classId            String @map("class_id")
+
+  pedagogicalGroup PedagogicalGroup @relation(fields: [pedagogicalGroupId], references: [id], onDelete: Cascade)
+  class            Class            @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  @@id([pedagogicalGroupId, classId])
+  @@map("pedagogical_group_classes")
+}
+
+/// Modèle de récurrence hebdomadaire — remplace TeacherWeeklySlot (Module 5.1), génère des Séance
+/// concrètes et indépendantes (voir MODULE-05.2 §1.8.1). Ne contraint jamais une séance déjà générée.
+model SeanceRecurrenceTemplate {
+  id                 String    @id @default(uuid())
+  teacherId          String    @map("teacher_id")
+  subjectOfferingId  String    @map("subject_offering_id")
+  roomId             String?   @map("room_id")
+  dayOfWeek          DayOfWeek @map("day_of_week")
+  startTime          String    @map("start_time")
+  endTime            String    @map("end_time")
+  pedagogicalGroupId String?   @map("pedagogical_group_id")
+  isActive           Boolean   @default(true) @map("is_active")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  teacher          Teacher           @relation(fields: [teacherId], references: [id], onDelete: Restrict)
+  subjectOffering  SubjectOffering   @relation(fields: [subjectOfferingId], references: [id], onDelete: Restrict)
+  room             Room?             @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  pedagogicalGroup PedagogicalGroup? @relation(fields: [pedagogicalGroupId], references: [id], onDelete: SetNull)
+
+  classes SeanceRecurrenceTemplateClass[]
+  seances Seance[]
+
+  @@index([teacherId])
+  @@map("seance_recurrence_templates")
+}
+
+model SeanceRecurrenceTemplateClass {
+  templateId String @map("template_id")
+  classId    String @map("class_id")
+
+  template SeanceRecurrenceTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  class    Class                    @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  @@id([templateId, classId])
+  @@map("seance_recurrence_template_classes")
+}
+
+enum SeanceStatus {
+  PROGRAMMEE
+  EFFECTUEE
+  REPORTEE
+  ANNULEE
+  REMPLACEE
+}
+
+enum TimesheetStatus {
+  OUVERTE
+  CLOTUREE
+}
+
+/// Fiche mensuelle de pointage — un enseignant × un mois (voir MODULE-05.1 §1.3, conservée telle
+/// quelle par le Module 5.2 §1.8). Clôturée : intégralement figée, symétrique de PayPeriod (Module 8).
+model TeacherMonthlyTimesheet {
+  id        String          @id @default(uuid())
+  teacherId String          @map("teacher_id")
+  year      Int
+  month     Int
+  status    TimesheetStatus @default(OUVERTE)
+  closedAt  DateTime?       @map("closed_at")
+  closedBy  String?         @map("closed_by")
+  createdAt DateTime        @default(now()) @map("created_at")
+  updatedAt DateTime        @updatedAt @map("updated_at")
+
+  teacher      Teacher  @relation(fields: [teacherId], references: [id], onDelete: Restrict)
+  closedByUser User?    @relation(fields: [closedBy], references: [id], onDelete: SetNull)
+  sessions     Seance[]
+
+  @@unique([teacherId, year, month])
+  @@map("teacher_monthly_timesheets")
+}
+
+/// Séance — entité centrale de l'emploi du temps (voir MODULE-05.2 §1.4/§1.8/§1.11). Supporte
+/// nativement 1 à N classes (relation SeanceClass) : les heures/le montant d'une séance ne sont
+/// jamais multipliés par le nombre de classes qui y assistent (§3 règle 2, non négociable).
+/// Remplace TeacherAttendanceSession (Module 5.1) : la case à cocher de la fiche mensuelle EST la
+/// séance réelle, plus de génération synthétique séparée.
+model Seance {
+  id                    String       @id @default(uuid())
+  teacherId             String       @map("teacher_id")
+  subjectOfferingId     String       @map("subject_offering_id")
+  roomId                String?      @map("room_id")
+  recurrenceTemplateId  String?      @map("recurrence_template_id")
+  timesheetId           String       @map("timesheet_id")
+  sessionDate           DateTime     @map("session_date")
+  startTime             String       @map("start_time")
+  endTime               String       @map("end_time")
+  status                SeanceStatus @default(PROGRAMMEE)
+  reason                String?
+  rescheduledToSeanceId String?      @unique @map("rescheduled_to_seance_id")
+  substituteTeacherId   String?      @map("substitute_teacher_id")
+  validatedAt           DateTime?    @map("validated_at")
+  validatedBy           String?      @map("validated_by")
+  createdAt             DateTime     @default(now()) @map("created_at")
+  updatedAt             DateTime     @updatedAt @map("updated_at")
+
+  teacher               Teacher                   @relation(fields: [teacherId], references: [id], onDelete: Restrict)
+  subjectOffering       SubjectOffering           @relation(fields: [subjectOfferingId], references: [id], onDelete: Restrict)
+  room                  Room?                     @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  recurrenceTemplate    SeanceRecurrenceTemplate? @relation(fields: [recurrenceTemplateId], references: [id], onDelete: SetNull)
+  timesheet             TeacherMonthlyTimesheet   @relation(fields: [timesheetId], references: [id], onDelete: Restrict)
+  substituteTeacher     Teacher?                  @relation("SubstituteTeacherSeances", fields: [substituteTeacherId], references: [id], onDelete: SetNull)
+  validatedByUser       User?                     @relation(fields: [validatedBy], references: [id], onDelete: SetNull)
+  rescheduledToSeance   Seance?                   @relation("SeanceReschedule", fields: [rescheduledToSeanceId], references: [id], onDelete: SetNull)
+  rescheduledFromSeance Seance?                   @relation("SeanceReschedule")
+
+  classes SeanceClass[]
+
+  @@unique([recurrenceTemplateId, sessionDate])
+  @@index([timesheetId])
+  @@index([teacherId])
+  @@index([sessionDate])
+  @@index([roomId])
+  @@map("seances")
+}
+
+model SeanceClass {
+  seanceId String @map("seance_id")
+  classId  String @map("class_id")
+
+  seance Seance @relation(fields: [seanceId], references: [id], onDelete: Cascade)
+  class  Class  @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  @@id([seanceId, classId])
+  @@index([classId])
+  @@map("seance_classes")
+}
+
+// ---------------------------------------------------------------------------
+// Module 8 — Paie des enseignants et du personnel
+// Voir docs/modules/MODULE-08-paie.md pour l'analyse et les règles métier
+// détaillées derrière ce schéma. Employee = sujet de paie unique (personnel
+// administratif ET enseignants payés) ; teacherId optionnel lie à un Teacher
+// existant (Module 5) sans jamais dupliquer son identité ni ses affectations.
+// ---------------------------------------------------------------------------
+
+/// Référentiel configurable (Directeur Général, Secrétaire, Comptable..., extensible) — voir MODULE-08 §1.2.
+/// Volontairement découplé de `roles` (RBAC, Module 1) : la catégorie RH ne détermine aucune permission.
+model EmployeeCategory {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  label     String
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  employees Employee[]
+
+  @@map("employee_categories")
+}
+
+enum SalaryMode {
+  FIXE
+  HORAIRE
+}
+
+/// Sujet de paie unique — voir MODULE-08 §1.1. Personnel administratif pur (teacher_id NULL) porte sa
+/// propre identité ; enseignant payé (teacher_id renseigné) a son identité lue depuis `teachers`, jamais
+/// recopiée (colonnes d'identité laissées NULL dans ce cas, contrôlé côté service).
+model Employee {
+  id                 String     @id @default(uuid())
+  matricule          String     @unique
+  categoryId         String     @map("category_id")
+  department         String?
+  contractTypeId     String?    @map("contract_type_id")
+  teacherId          String?    @unique @map("teacher_id")
+  lastName           String?    @map("last_name")
+  firstName          String?    @map("first_name")
+  gender             Gender?
+  phonePrimary       String?    @map("phone_primary")
+  phoneSecondary     String?    @map("phone_secondary")
+  whatsapp           String?
+  email              String?
+  address            String?
+  photoPath          String?    @map("photo_path")
+  /// Identité civile (2026-08-06) — nécessaire pour les contrats de travail (Module Personnel), absente
+  /// jusqu'ici car aucun document Employee n'en avait besoin ; miroir des champs déjà présents sur Teacher.
+  birthDate          DateTime?  @map("birth_date")
+  birthPlace         String?    @map("birth_place")
+  nationality        String?
+  idNumber           String?    @map("id_number")
+  hireDate           DateTime?  @map("hire_date")
+  salaryMode         SalaryMode @default(FIXE) @map("salary_mode")
+  fixedMonthlySalary Decimal?   @map("fixed_monthly_salary") @db.Decimal(12, 2)
+  hourlyRate         Decimal?   @map("hourly_rate") @db.Decimal(10, 2)
+  teachingHoursPaid  Boolean    @default(false) @map("teaching_hours_paid")
+  archivedAt         DateTime?  @map("archived_at")
+  archivedReason     String?    @map("archived_reason")
+  archivedBy         String?    @map("archived_by")
+  createdAt          DateTime   @default(now()) @map("created_at")
+  updatedAt          DateTime   @updatedAt @map("updated_at")
+
+  category       EmployeeCategory     @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  contractType   TeacherContractType? @relation(fields: [contractTypeId], references: [id], onDelete: SetNull)
+  teacher        Teacher?             @relation(fields: [teacherId], references: [id], onDelete: SetNull)
+  archivedByUser User?                @relation(fields: [archivedBy], references: [id], onDelete: SetNull)
+
+  salaryAdvances SalaryAdvance[]
+  payrollLines   PayrollLine[]
+  assetsResponsibleFor Asset[] @relation("AssetResponsibleEmployee")
+  loansAsBorrower Loan[]       @relation("LoanBorrowerEmployee")
+  digitalDocumentSharesReceived DigitalDocumentShare[] @relation("DigitalDocumentShareRecipientEmployee")
+
+  @@index([lastName, firstName])
+  @@map("employees")
+}
+
+enum PayPeriodStatus {
+  OUVERT
+  EN_COURS
+  CLOTURE
+}
+
+/// Mois de paie — clé (année, mois), même granularité calendaire que `accounting_periods` (Module 7)
+/// mais table distincte (cycle de vie plus riche) — voir MODULE-08 §1.6.
+model PayPeriod {
+  id          String          @id @default(uuid())
+  year        Int
+  month       Int
+  status      PayPeriodStatus @default(OUVERT)
+  openedAt    DateTime        @default(now()) @map("opened_at")
+  closedAt    DateTime?       @map("closed_at")
+  paymentDate DateTime?       @map("payment_date")
+  validatedBy String?         @map("validated_by")
+  createdAt   DateTime        @default(now()) @map("created_at")
+  updatedAt   DateTime        @updatedAt @map("updated_at")
+
+  validatedByUser User? @relation(fields: [validatedBy], references: [id], onDelete: SetNull)
+
+  payrollLines           PayrollLine[]
+  salaryAdvancesGranted  SalaryAdvance[] @relation("SalaryAdvanceGrantedPeriod")
+  salaryAdvancesDeducted SalaryAdvance[] @relation("SalaryAdvanceDeductionPeriod")
+
+  @@unique([year, month])
+  @@map("pay_periods")
+}
+
+enum PayrollComponentKind {
+  PRIME
+  INDEMNITE
+  RETENUE
+  COTISATION
+}
+
+/// Référentiel configurable de primes/indemnités/retenues/cotisations — voir MODULE-08 §1.7.
+/// Pas de barème automatique : montant saisi manuellement par ligne de paie (payroll_line_components).
+model PayrollComponentType {
+  id        String               @id @default(uuid())
+  code      String               @unique
+  label     String
+  kind      PayrollComponentKind
+  isActive  Boolean              @default(true) @map("is_active")
+  createdAt DateTime             @default(now()) @map("created_at")
+  updatedAt DateTime             @updatedAt @map("updated_at")
+
+  lines PayrollLineComponent[]
+
+  @@map("payroll_component_types")
+}
+
+enum SalaryAdvanceStatus {
+  EN_ATTENTE
+  DEDUITE
+  ANNULEE
+}
+
+/// Avance sur salaire — jamais supprimée physiquement (voir MODULE-08 §1.8).
+model SalaryAdvance {
+  id                   String              @id @default(uuid())
+  employeeId           String              @map("employee_id")
+  amount               Decimal             @db.Decimal(12, 2)
+  grantedPayPeriodId   String              @map("granted_pay_period_id")
+  deductionPayPeriodId String?             @map("deduction_pay_period_id")
+  reason               String?
+  status               SalaryAdvanceStatus @default(EN_ATTENTE)
+  createdAt            DateTime            @default(now()) @map("created_at")
+  updatedAt            DateTime            @updatedAt @map("updated_at")
+
+  employee           Employee   @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  grantedPayPeriod   PayPeriod  @relation("SalaryAdvanceGrantedPeriod", fields: [grantedPayPeriodId], references: [id], onDelete: Restrict)
+  deductionPayPeriod PayPeriod? @relation("SalaryAdvanceDeductionPeriod", fields: [deductionPayPeriodId], references: [id], onDelete: SetNull)
+
+  @@index([employeeId])
+  @@map("salary_advances")
+}
+
+enum PayrollLineStatus {
+  BROUILLON
+  CALCULEE
+  VALIDEE
+}
+
+/// Origine des heures horaires d'un bulletin — voir MODULE-05.1 §1.10 (révise ADR-035).
+/// POINTAGE : fiche mensuelle de pointage complète disponible pour ce mois. PLANIFIE : repli sur
+/// l'ancien proxy (heures planifiées des affectations), faute de fiche de pointage disponible.
+enum HoursSource {
+  POINTAGE
+  PLANIFIE
+  /// Heures saisies à la main par un utilisateur, depuis la fiche d'émargement papier signée
+  /// (remplace le pointage numérique abandonné — voir FICHE_EMARGEMENT_ENSEIGNANT). Un recalcul
+  /// automatique (calculatePayrollLine) ne doit jamais écraser une valeur MANUEL.
+  MANUEL
+}
+
+/// Une ligne par employé × période — le bulletin figé une fois VALIDEE (voir MODULE-08 §1.9/§1.10).
+/// Recalculable tant que BROUILLON/CALCULEE. verification_code réservé pour un futur QR code (comme Payment).
+model PayrollLine {
+  id                    String            @id @default(uuid())
+  payPeriodId           String            @map("pay_period_id")
+  employeeId            String            @map("employee_id")
+  baseSalary            Decimal           @default(0) @map("base_salary") @db.Decimal(12, 2)
+  hoursPlanned          Decimal?          @map("hours_planned") @db.Decimal(6, 2)
+  hoursWorked           Decimal?          @map("hours_worked") @db.Decimal(6, 2)
+  hoursSource           HoursSource?      @map("hours_source")
+  hourlyRate            Decimal?          @map("hourly_rate") @db.Decimal(10, 2)
+  overtimeHours         Decimal?          @map("overtime_hours") @db.Decimal(6, 2)
+  overtimeAmount        Decimal?          @map("overtime_amount") @db.Decimal(12, 2)
+  totalPrimes           Decimal           @default(0) @map("total_primes") @db.Decimal(12, 2)
+  totalIndemnites       Decimal           @default(0) @map("total_indemnites") @db.Decimal(12, 2)
+  totalRetenues         Decimal           @default(0) @map("total_retenues") @db.Decimal(12, 2)
+  totalAdvancesDeducted Decimal           @default(0) @map("total_advances_deducted") @db.Decimal(12, 2)
+  totalCotisations      Decimal           @default(0) @map("total_cotisations") @db.Decimal(12, 2)
+  grossSalary           Decimal           @default(0) @map("gross_salary") @db.Decimal(12, 2)
+  netSalary             Decimal           @default(0) @map("net_salary") @db.Decimal(12, 2)
+  paymentMethodId       String?           @map("payment_method_id")
+  status                PayrollLineStatus @default(BROUILLON)
+  verificationCode      String?           @map("verification_code")
+  calculatedAt          DateTime?         @map("calculated_at")
+  validatedAt           DateTime?         @map("validated_at")
+  validatedBy           String?           @map("validated_by")
+  createdAt             DateTime          @default(now()) @map("created_at")
+  updatedAt             DateTime          @updatedAt @map("updated_at")
+
+  payPeriod       PayPeriod      @relation(fields: [payPeriodId], references: [id], onDelete: Restrict)
+  employee        Employee       @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  paymentMethod   PaymentMethod? @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
+  validatedByUser User?          @relation(fields: [validatedBy], references: [id], onDelete: SetNull)
+
+  components PayrollLineComponent[]
+
+  @@unique([payPeriodId, employeeId])
+  @@map("payroll_lines")
+}
+
+/// Détail des primes/indemnités/retenues/cotisations appliquées à une ligne de paie.
+model PayrollLineComponent {
+  id              String   @id @default(uuid())
+  payrollLineId   String   @map("payroll_line_id")
+  componentTypeId String   @map("component_type_id")
+  amount          Decimal  @db.Decimal(12, 2)
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  payrollLine   PayrollLine          @relation(fields: [payrollLineId], references: [id], onDelete: Cascade)
+  componentType PayrollComponentType @relation(fields: [componentTypeId], references: [id], onDelete: Restrict)
+
+  @@index([payrollLineId])
+  @@map("payroll_line_components")
+}
+
+/// Réglages de la paie — singleton (voir MODULE-08 §1.11). Intégration comptable conditionnelle,
+/// même principe qu'ADR-028 : aucune écriture générée tant que le compte n'est pas configuré.
+model PayrollSettings {
+  id                          String   @id @default(uuid())
+  salaryExpenseAccountId      String?  @map("salary_expense_account_id")
+  defaultHourlyRate           Decimal? @map("default_hourly_rate") @db.Decimal(10, 2)
+  defaultSessionDurationHours Decimal? @map("default_session_duration_hours") @db.Decimal(4, 2)
+  /// Majoration des heures supplémentaires (ex. 1.25 = +25%) — MODULE-05.2 §1.10. Champ de
+  /// configuration uniquement : aucun calcul automatique tant que la règle exacte de
+  /// déclenchement n'est pas précisée par le porteur du projet (point ouvert §6.5).
+  overtimeMultiplier          Decimal? @map("overtime_multiplier") @db.Decimal(4, 2)
+  /// Plafond mensuel d'heures par défaut — MODULE-05.2 §1.10. Même statut que overtimeMultiplier.
+  monthlyHoursCap             Decimal? @map("monthly_hours_cap") @db.Decimal(6, 2)
+  updatedAt                   DateTime @updatedAt @map("updated_at")
+
+  salaryExpenseAccount ChartAccount? @relation(fields: [salaryExpenseAccountId], references: [id], onDelete: SetNull)
+
+  @@map("payroll_settings")
+}
+
+// ---------------------------------------------------------------------------
+// Module 6 — Évaluation (notes, bulletins, classement)
+// Voir docs/modules/MODULE-06-evaluation.md pour l'analyse et les points
+// ouverts validés derrière ce schéma. Porte le domaine "bulletin de notes"
+// du système existant analysé (RAPPORT_ANALYSE_ISAC_ERP.md) en réutilisant
+// SubjectOffering (Module 2.1) comme contexte d'une note plutôt que de
+// dupliquer matière/année/coefficient ; bulletins rendus en écran HTML/CSS
+// imprimable (comme PayslipView/ReceiptView), aucun fichier PDF stocké.
+// ---------------------------------------------------------------------------
+
+/// Réglages de l'évaluation — singleton configurable (voir MODULE-06 §1.2/§1.6).
+/// Pondérations des composantes et seuils de mention/admission, jamais codés en dur.
+model EvaluationSettings {
+  id                      String   @id @default(uuid())
+  poidsOrale              Decimal  @default(1.0) @map("poids_orale") @db.Decimal(3, 1)
+  poidsEcrite             Decimal  @default(1.0) @map("poids_ecrite") @db.Decimal(3, 1)
+  poidsComposition        Decimal  @default(1.0) @map("poids_composition") @db.Decimal(3, 1)
+  seuilAdmission          Decimal  @default(10.0) @map("seuil_admission") @db.Decimal(4, 2)
+  seuilPassable           Decimal  @default(10.0) @map("seuil_passable") @db.Decimal(4, 2)
+  seuilAssezBien          Decimal  @default(12.0) @map("seuil_assez_bien") @db.Decimal(4, 2)
+  seuilBien               Decimal  @default(14.0) @map("seuil_bien") @db.Decimal(4, 2)
+  seuilTresBien           Decimal  @default(16.0) @map("seuil_tres_bien") @db.Decimal(4, 2)
+  // Régularité (2026-08-03, retour du porteur du projet) : au-delà de ce nombre d'absences NON
+  // JUSTIFIÉES sur la période (ou l'année, pour le bulletin annuel), la mention "Irrégulier" remplace
+  // "Régulier" sur le bulletin — calculé automatiquement à la génération, voir bulletinPeriodeService.ts.
+  seuilAbsencesIrregulier Int      @default(5) @map("seuil_absences_irregulier")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  @@map("evaluation_settings")
+}
+
+/// Une note par étudiant × affectation de matière — jamais de duplication de matière/contexte,
+/// SubjectOffering porte déjà matière/année/semestre/niveau/filière/coefficient (voir MODULE-06 §1.1).
+model Note {
+  id                String   @id @default(uuid())
+  studentId         String   @map("student_id")
+  subjectOfferingId String   @map("subject_offering_id")
+  noteOrale         Decimal? @map("note_orale") @db.Decimal(4, 2)
+  noteEcrite        Decimal? @map("note_ecrite") @db.Decimal(4, 2)
+  noteComposition   Decimal? @map("note_composition") @db.Decimal(4, 2)
+  noteFinale        Decimal? @map("note_finale") @db.Decimal(4, 2)
+  verrouillee       Boolean  @default(false)
+  saisiePar         String?  @map("saisie_par")
+  saisieLe          DateTime @default(now()) @map("saisie_le")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  student         Student         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subjectOffering SubjectOffering @relation(fields: [subjectOfferingId], references: [id], onDelete: Restrict)
+  saisieParUser   User?           @relation(fields: [saisiePar], references: [id], onDelete: SetNull)
+
+  @@unique([studentId, subjectOfferingId])
+  @@index([studentId])
+  @@map("notes")
+}
+
+/// Bulletin de période — instantané figé à la génération (voir MODULE-06 §1.7). Jamais de fichier
+/// PDF stocké : rendu en écran HTML/CSS imprimable, l'enregistrement lui-même est l'archive.
+/// Immuable une fois créé (voir §3 règle 7) : régénérer exige d'annuler le précédent au préalable.
+model BulletinPeriode {
+  id               String             @id @default(uuid())
+  studentId        String             @map("student_id")
+  academicPeriodId String             @map("academic_period_id")
+  numeroDossier    String             @unique @map("numero_dossier")
+  moyenne          Decimal?           @db.Decimal(4, 2)
+  mention          String
+  // Régularité (2026-08-03) : "Régulier"/"Irrégulier", calculée à la génération selon le nombre
+  // d'absences non justifiées sur la période — voir EvaluationSettings.seuilAbsencesIrregulier.
+  regularite       String
+  decision         EnrollmentDecision
+  rang             Int?
+  effectifClasse   Int                @map("effectif_classe")
+  verificationCode String             @map("verification_code")
+  annule           Boolean            @default(false)
+  annulePar        String?            @map("annule_par")
+  annuleLe         DateTime?          @map("annule_le")
+  generePar        String?            @map("genere_par")
+  genereLe         DateTime           @default(now()) @map("genere_le")
+
+  student        Student        @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  academicPeriod AcademicPeriod @relation(fields: [academicPeriodId], references: [id], onDelete: Restrict)
+  genereParUser  User?          @relation(fields: [generePar], references: [id], onDelete: SetNull)
+  annuleParUser  User?          @relation("BulletinPeriodeAnnuleParUser", fields: [annulePar], references: [id], onDelete: SetNull)
+
+  // Pas de @@unique ici : un étudiant peut avoir plusieurs bulletins historiques pour la même
+  // période (annulés) mais un seul actif à la fois — contrainte appliquée via un index unique
+  // partiel (WHERE annule = false) ajouté à la main dans la migration, voir MODULE-06 §3 règle 7.
+  @@index([studentId, academicPeriodId])
+  @@index([studentId])
+  @@map("bulletins_periode")
+}
+
+/// Bulletin annuel — instantané figé à la génération (voir MODULE-06 §1.8), même principe que
+/// BulletinPeriode.
+model BulletinAnnuel {
+  id               String             @id @default(uuid())
+  studentId        String             @map("student_id")
+  academicYearId   String             @map("academic_year_id")
+  numeroDossier    String             @unique @map("numero_dossier")
+  moyenneAnnuelle  Decimal?           @map("moyenne_annuelle") @db.Decimal(4, 2)
+  mention          String
+  // Régularité (2026-08-03) : "Régulier"/"Irrégulier", calculée à la génération selon le nombre
+  // d'absences non justifiées sur l'année — voir EvaluationSettings.seuilAbsencesIrregulier.
+  regularite       String
+  decision         EnrollmentDecision
+  rang             Int?
+  effectif         Int
+  verificationCode String             @map("verification_code")
+  annule           Boolean            @default(false)
+  annulePar        String?            @map("annule_par")
+  annuleLe         DateTime?          @map("annule_le")
+  generePar        String?            @map("genere_par")
+  genereLe         DateTime           @default(now()) @map("genere_le")
+
+  student       Student      @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  academicYear  AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
+  genereParUser User?        @relation(fields: [generePar], references: [id], onDelete: SetNull)
+  annuleParUser User?        @relation("BulletinAnnuelAnnuleParUser", fields: [annulePar], references: [id], onDelete: SetNull)
+
+  // Même principe que BulletinPeriode : index unique partiel (WHERE annule = false) ajouté à la
+  // main dans la migration plutôt qu'une contrainte @@unique classique (MODULE-06 §3 règle 7).
+  @@index([studentId, academicYearId])
+  @@index([studentId])
+  @@map("bulletins_annuels")
+}
+
+// ---------------------------------------------------------------------------
+// Module 12 — Centre de Communication Intelligent
+// Voir docs/modules/MODULE-12-communication.md pour l'analyse et les points
+// ouverts validés derrière ce schéma. Aucune nouvelle table de "contacts" :
+// le carnet d'adresses (MODULE-12 §1.3) est une lecture à la demande sur
+// Student/Guardian/Teacher/Employee, déjà porteurs des champs téléphone/
+// WhatsApp/e-mail nécessaires — jamais de copie synchronisée. WhatsApp
+// n'est jamais un canal automatique (MODULE-12 §3 règle 7, §6.1) : c'est un
+// flux "cliquer pour envoyer" (lien wa.me), pas un envoi programmatique —
+// écarté pour ne pas violer les CGU WhatsApp avec l'application classique.
+// ---------------------------------------------------------------------------
+
+/// Réglages génériques du module — singleton (voir MODULE-12 §1.12). Logo/nom officiel/coordonnées
+/// réutilisés en lecture depuis EstablishmentSettings/CampusSettings (Module 2), jamais dupliqués.
+model CommunicationSettings {
+  id             String   @id @default(uuid())
+  emailSignature String?  @map("email_signature")
+  messageFooter  String?  @map("message_footer")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("communication_settings")
+}
+
+enum GatewayConnectionStatus {
+  CONNECTE
+  DECONNECTE
+  INCONNU
+}
+
+/// Compte de passerelle SMS — plusieurs comptes possibles ("principal et secours", voir MODULE-12
+/// §1.12), un seul `isDefault` à la fois. Couvre aussi bien un fournisseur API cloud qu'une
+/// passerelle locale (téléphone Android dédié, voir MODULE-12 §6.1) : `providerName` distingue le
+/// type, `apiIdentifier`/`apiKey` portent l'URL de base et les identifiants dans ce dernier cas.
+model SmsGatewayAccount {
+  id                  String                  @id @default(uuid())
+  providerName        String                  @map("provider_name")
+  label               String
+  apiIdentifier       String?                 @map("api_identifier")
+  apiKey              String?                 @map("api_key")
+  senderId            String?                 @map("sender_id")
+  officialPhoneNumber String?                 @map("official_phone_number")
+  balance             Decimal?                @db.Decimal(10, 2)
+  isDefault           Boolean                 @default(false) @map("is_default")
+  isActive            Boolean                 @default(true) @map("is_active")
+  connectionStatus    GatewayConnectionStatus @default(INCONNU) @map("connection_status")
+  lastTestedAt        DateTime?               @map("last_tested_at")
+  createdAt           DateTime                @default(now()) @map("created_at")
+  updatedAt           DateTime                @updatedAt @map("updated_at")
+
+  @@map("sms_gateway_accounts")
+}
+
+/// WhatsApp Business — un seul compte officiel demandé (voir MODULE-12 §1.12), singleton. Ne sert
+/// aujourd'hui qu'à générer les liens "cliquer pour envoyer" (wa.me), jamais un envoi programmatique.
+model WhatsAppGatewaySettings {
+  id                  String                  @id @default(uuid())
+  businessPhoneNumber String?                 @map("business_phone_number")
+  apiIdentifier       String?                 @map("api_identifier")
+  accessToken         String?                 @map("access_token")
+  connectionStatus    GatewayConnectionStatus @default(INCONNU) @map("connection_status")
+  lastTestedAt        DateTime?               @map("last_tested_at")
+  updatedAt           DateTime                @updatedAt @map("updated_at")
+
+  @@map("whatsapp_gateway_settings")
+}
+
+/// E-mail — un seul compte SMTP demandé (voir MODULE-12 §1.12), singleton.
+model EmailGatewaySettings {
+  id               String                  @id @default(uuid())
+  officialEmail    String?                 @map("official_email")
+  smtpHost         String?                 @map("smtp_host")
+  smtpPort         Int?                    @map("smtp_port")
+  smtpUsername     String?                 @map("smtp_username")
+  smtpPassword     String?                 @map("smtp_password")
+  useTls           Boolean                 @default(true) @map("use_tls")
+  connectionStatus GatewayConnectionStatus @default(INCONNU) @map("connection_status")
+  lastTestedAt     DateTime?               @map("last_tested_at")
+  updatedAt        DateTime                @updatedAt @map("updated_at")
+
+  @@map("email_gateway_settings")
+}
+
+enum CommunicationChannel {
+  SMS
+  WHATSAPP
+  EMAIL
+  INTERNE
+}
+
+/// Gabarit de message — référentiel configurable, jamais codé en dur (voir MODULE-12 §1.8/§1.9),
+/// 11 modèles d'exemple seedés (`isSystem = true`, modifiables mais jamais supprimables).
+model MessageTemplate {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  label     String
+  content   String
+  isSystem  Boolean  @default(false) @map("is_system")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  notificationEventConfigs NotificationEventConfig[]
+  campaigns                Campaign[]
+  messages                 CommunicationMessage[]
+
+  @@map("message_templates")
+}
+
+/// Type d'événement automatique (voir MODULE-12 §1.10). NOUVELLES_NOTES fusionné dans
+/// BULLETIN_DISPONIBLE (point ouvert §6 point 4 : notifié à la disponibilité du bulletin, pas à
+/// chaque saisie). ABSENCE/CERTIFICAT_DISPONIBLE/ATTESTATION_DISPONIBLE définis mais sans aucun
+/// déclencheur actif tant que leurs modules sources (suivi des absences, Module 9) n'existent pas
+/// (point ouvert §6 point 5). CONVOCATION n'est pas un événement automatique — gabarit manuel.
+enum NotificationEventType {
+  INSCRIPTION_VALIDEE
+  PAIEMENT_SCOLARITE
+  BULLETIN_DISPONIBLE
+  CHANGEMENT_EMPLOI_DU_TEMPS
+  ABSENCE
+  CERTIFICAT_DISPONIBLE
+  ATTESTATION_DISPONIBLE
+  // Sanction disciplinaire enregistrée (2026-08-03, retour du porteur du projet) — notifie l'étudiant
+  // et son/ses tuteur(s) principal(aux) dès l'enregistrement, avant même la génération de l'avis PDF.
+  SANCTION_ENREGISTREE
+  // Nouvelle affectation pédagogique enregistrée (2026-08-06, retour du porteur du projet) — notifie
+  // l'enseignant concerné dès la création de l'affectation (Module 5).
+  AFFECTATION_ENSEIGNANT_CREEE
+}
+
+/// Configuration d'une notification automatique — un enregistrement par type d'événement (voir
+/// MODULE-12 §1.10). `channels` ne peut jamais contenir WHATSAPP (règle §3 point 7) : seuls SMS et
+/// EMAIL portent une notification réellement automatique.
+model NotificationEventConfig {
+  id         String                 @id @default(uuid())
+  eventType  NotificationEventType  @unique @map("event_type")
+  templateId String                 @map("template_id")
+  channels   CommunicationChannel[]
+  isActive   Boolean                @default(true) @map("is_active")
+  updatedAt  DateTime               @updatedAt @map("updated_at")
+
+  template MessageTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+
+  @@map("notification_event_configs")
+}
+
+enum CampaignAudienceType {
+  INDIVIDUEL
+  CLASSE
+  CLASSES
+  FILIERE
+  FILIERES
+  CAMPUS
+  TOUS_ETUDIANTS
+  TOUS_ENSEIGNANTS
+  TOUS_PARENTS
+  TOUT_PERSONNEL
+}
+
+enum CampaignScheduleType {
+  IMMEDIAT
+  DIFFERE
+  QUOTIDIEN
+  HEBDOMADAIRE
+  MENSUEL
+}
+
+enum CampaignStatus {
+  BROUILLON
+  PLANIFIEE
+  EN_COURS
+  SUSPENDUE
+  TERMINEE
+  ANNULEE
+}
+
+/// Campagne (voir MODULE-12 §1.6/§1.7). L'audience est résolue à chaque envoi, jamais figée à la
+/// création (règle §3 point 5) : `audienceFilter` porte les identifiants (classe(s)/filière(s)...)
+/// selon `audienceType`, jamais la liste de destinataires elle-même.
+model Campaign {
+  id                String               @id @default(uuid())
+  name              String
+  description       String?
+  channel           CommunicationChannel
+  templateId        String?              @map("template_id")
+  customContent     String?              @map("custom_content")
+  audienceType      CampaignAudienceType @map("audience_type")
+  audienceFilter    Json?                @map("audience_filter")
+  status            CampaignStatus       @default(BROUILLON)
+  scheduleType      CampaignScheduleType @default(IMMEDIAT) @map("schedule_type")
+  scheduledFor      DateTime?            @map("scheduled_for")
+  recurrenceEndDate DateTime?            @map("recurrence_end_date")
+  createdByUserId   String?              @map("created_by_user_id")
+  createdAt         DateTime             @default(now()) @map("created_at")
+  updatedAt         DateTime             @updatedAt @map("updated_at")
+
+  template      MessageTemplate?       @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  createdByUser User?                  @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  messages      CommunicationMessage[]
+
+  @@index([status])
+  @@map("campaigns")
+}
+
+enum CommunicationRecipientType {
+  ETUDIANT
+  PARENT
+  ENSEIGNANT
+  PERSONNEL
+  AUTRE
+}
+
+enum CommunicationMessageStatus {
+  EN_ATTENTE
+  ENVOYE
+  LIVRE
+  LU
+  ECHOUE
+}
+
+/// Historique — un enregistrement par envoi individuel réel, jamais par campagne (voir MODULE-12
+/// §1.13/§2). `recipientId` est volontairement sans FK (polymorphe selon `recipientType`) ;
+/// nom/téléphone/e-mail du destinataire dénormalisés au moment de l'envoi pour que l'historique
+/// reste lisible même si la fiche source est ensuite modifiée ou archivée (règle §3 point 6).
+model CommunicationMessage {
+  id             String                     @id @default(uuid())
+  channel        CommunicationChannel
+  recipientType  CommunicationRecipientType @map("recipient_type")
+  recipientId    String?                    @map("recipient_id")
+  recipientName  String                     @map("recipient_name")
+  recipientPhone String?                    @map("recipient_phone")
+  recipientEmail String?                    @map("recipient_email")
+  content        String
+  templateId     String?                    @map("template_id")
+  campaignId     String?                    @map("campaign_id")
+  status         CommunicationMessageStatus @default(EN_ATTENTE)
+  errorMessage   String?                    @map("error_message")
+  sentByUserId   String?                    @map("sent_by_user_id")
+  scheduledFor   DateTime?                  @map("scheduled_for")
+  sentAt         DateTime?                  @map("sent_at")
+  createdAt      DateTime                   @default(now()) @map("created_at")
+
+  template   MessageTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  campaign   Campaign?        @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  sentByUser User?            @relation(fields: [sentByUserId], references: [id], onDelete: SetNull)
+
+  @@index([channel])
+  @@index([status])
+  @@index([campaignId])
+  @@index([recipientType, recipientId])
+  @@map("communication_messages")
+}
+
+/// Notification interne — in-app uniquement (voir MODULE-12 §1.10, canal INTERNE).
+model InternalNotification {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  title     String
+  content   String
+  isRead    Boolean  @default(false) @map("is_read")
+  linkType  String?  @map("link_type")
+  linkId    String?  @map("link_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@map("internal_notifications")
+}
+
+// ---------------------------------------------------------------------------
+// Module 10 — Tableau de bord & Rapports décisionnels
+// Voir docs/modules/MODULE-10-tableau-de-bord.md. Les rapports (performance
+// pédagogique, tendances financières/RH) restent des requêtes à la demande
+// sur les tables des modules 4/4.2/4.3/5/5.2/6/7/8 — aucune table dédiée.
+// Seul le moteur d'alertes (concept nouveau, absent du reste du système)
+// nécessite un schéma : AlertRule (configuration) + AlertEvent (historique,
+// évite de renotifier en boucle tant que le seuil reste franchi).
+// ---------------------------------------------------------------------------
+
+enum AlertComparator {
+  LT
+  LTE
+  GT
+  GTE
+}
+
+/// Règle d'alerte configurable sans coder (voir §1.3/§2 du doc) — même principe que
+/// NotificationEventConfig (Module 12) : jamais de seuil codé en dur.
+model AlertRule {
+  id          String          @id @default(uuid())
+  code        String          @unique
+  label       String
+  metricType  String          @map("metric_type")
+  comparator  AlertComparator
+  threshold   Decimal         @db.Decimal(14, 2)
+  scope       String?
+  channels    String[]        @default(["INTERNE"])
+  isActive    Boolean         @default(true) @map("is_active")
+  createdAt   DateTime        @default(now()) @map("created_at")
+  updatedAt   DateTime        @updatedAt @map("updated_at")
+
+  events AlertEvent[]
+
+  @@map("alert_rules")
+}
+
+/// Historique de franchissement d'une AlertRule — `resolvedAt` renseigné quand la métrique repasse
+/// du bon côté du seuil ; tant qu'un événement de la règle est non résolu, la boucle de vérification
+/// ne republie pas de notification (évite le bruit répété). Les `InternalNotification` envoyées pour
+/// un événement (une par destinataire, voir alertEngineService) ne sont pas reliées ici par clé
+/// étrangère — même principe que `InternalNotification.linkId/linkType` (référence libre), inutile
+/// de modéliser une relation 1-à-N pour un simple lien de traçabilité.
+model AlertEvent {
+  id          String    @id @default(uuid())
+  ruleId      String    @map("rule_id")
+  triggeredAt DateTime  @default(now()) @map("triggered_at")
+  resolvedAt  DateTime? @map("resolved_at")
+  value       Decimal   @db.Decimal(14, 2)
+
+  rule AlertRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  @@index([ruleId, resolvedAt])
+  @@map("alert_events")
+}
+
+// ---------------------------------------------------------------------------
+// Module 11 — Sauvegarde, Sécurité avancée, Audit
+// Voir docs/modules/MODULE-11-sauvegarde-securite.md. Le journal d'audit
+// (AuditLog, Module 1) est déjà systématique — aucune table supplémentaire
+// nécessaire pour cette partie. La 2FA étend User (totpSecret/totpEnabled,
+// voir plus haut) et SecuritySettings (politique de mot de passe, voir plus
+// haut) — seuls les codes de récupération et la sauvegarde de base de
+// données sont des concepts réellement nouveaux ci-dessous.
+// ---------------------------------------------------------------------------
+
+enum BackupTriggerType {
+  PLANIFIEE
+  MANUELLE
+}
+
+enum BackupStatus {
+  EN_COURS
+  REUSSIE
+  ECHOUEE
+}
+
+/// Sauvegarde réelle de la base PostgreSQL (`pg_dump`), distincte de l'export de paramétrage
+/// (`SettingsBackup`, Module 2 — configuration seulement, jamais les données).
+model DatabaseBackup {
+  id            String            @id @default(uuid())
+  fileName      String            @map("file_name")
+  filePath      String            @map("file_path")
+  fileSizeBytes Int               @default(0) @map("file_size_bytes")
+  triggerType   BackupTriggerType @map("trigger_type")
+  status        BackupStatus      @default(EN_COURS)
+  errorMessage  String?           @map("error_message")
+  createdBy     String?           @map("created_by")
+  createdAt     DateTime          @default(now()) @map("created_at")
+
+  createdByUser User? @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@map("database_backups")
+}
+
+/// Réglages de la sauvegarde planifiée — singleton (une seule ligne par installation).
+model BackupSettings {
+  id                String   @id @default(uuid())
+  isScheduleEnabled Boolean  @default(true) @map("is_schedule_enabled")
+  scheduleHour      Int      @default(2) @map("schedule_hour")
+  retentionCount    Int      @default(14) @map("retention_count")
+  storageDirectory  String?  @map("storage_directory")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@map("backup_settings")
+}
+
+/// Code de récupération 2FA à usage unique (voir §1.2 du doc) — évite qu'un compte devienne
+/// irrécupérable en cas de perte de l'appareil TOTP. Haché comme un mot de passe (`bcrypt`), jamais
+/// stocké en clair : un code de récupération vaut une preuve d'identité au même titre qu'un mot de passe.
+model TwoFactorBackupCode {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  codeHash  String    @map("code_hash")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("two_factor_backup_codes")
+}
+
+// ---------------------------------------------------------------------------
+// Module 14 — Inventaire
+// Voir docs/modules/MODULE-14-inventaire.md. Registre des biens/matériel de
+// l'établissement, indépendant de la comptabilité (Module 7) — valeurs/coûts
+// en champs informatifs uniquement, aucune écriture comptable générée.
+// Référentiel de lieux dédié (AssetLocation), distinct de Room (Module 5.2,
+// réservée à l'emploi du temps).
+// ---------------------------------------------------------------------------
+
+enum AssetCondition {
+  BON
+  MOYEN
+  MAUVAIS
+}
+
+enum AssetStatus {
+  EN_SERVICE
+  EN_PANNE
+  EN_REPARATION
+  REFORME
+  PERDU_VOLE
+}
+
+enum AssetMaintenanceStatus {
+  PLANIFIEE
+  TERMINEE
+}
+
+/// Référentiel de lieux dédié à l'inventaire (bâtiment/étage/désignation) — distinct de `Room`
+/// (Module 5.2, réservée à la planification de l'emploi du temps) : un bien peut se trouver hors
+/// salle de classe (bureau, entrepôt...), voir MODULE-14 §1.1/§3.
+model AssetLocation {
+  id        String   @id @default(uuid())
+  building  String
+  floor     String?
+  label     String
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  assets Asset[]
+
+  @@unique([building, floor, label])
+  @@map("asset_locations")
+}
+
+/// Référentiel configurable de catégories de biens (ex. Mobilier, Informatique) — même principe que
+/// `ExpenseCategory`/`FeeType` : aucune catégorie codée en dur.
+model AssetCategory {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  assets Asset[]
+
+  @@map("asset_categories")
+}
+
+/// Fiche de bien — voir MODULE-14 §1.1. Jamais supprimée physiquement : un bien hors d'usage passe
+/// par le statut REFORME/PERDU_VOLE avec justification (§1.4), comme partout ailleurs dans le projet.
+model Asset {
+  id                     String          @id @default(uuid())
+  inventoryNumber        String          @unique @map("inventory_number")
+  label                  String
+  description            String?
+  photoPath               String?        @map("photo_path")
+  categoryId             String          @map("category_id")
+  locationId              String?        @map("location_id")
+  responsibleEmployeeId   String?        @map("responsible_employee_id")
+  responsibleTeacherId    String?        @map("responsible_teacher_id")
+  condition               AssetCondition @default(BON)
+  status                  AssetStatus    @default(EN_SERVICE)
+  acquisitionValue        Decimal?       @map("acquisition_value") @db.Decimal(12, 2)
+  acquisitionDate          DateTime?     @map("acquisition_date")
+  reformJustification      String?       @map("reform_justification")
+  createdAt               DateTime       @default(now()) @map("created_at")
+  updatedAt               DateTime       @updatedAt @map("updated_at")
+
+  category            AssetCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  location            AssetLocation? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  responsibleEmployee  Employee?     @relation("AssetResponsibleEmployee", fields: [responsibleEmployeeId], references: [id], onDelete: SetNull)
+  responsibleTeacher   Teacher?      @relation("AssetResponsibleTeacher", fields: [responsibleTeacherId], references: [id], onDelete: SetNull)
+
+  movements    AssetMovement[]
+  maintenances AssetMaintenance[]
+
+  @@index([categoryId])
+  @@index([locationId])
+  @@index([status])
+  @@map("assets")
+}
+
+/// Historique des changements de localisation/responsable/état/statut d'un bien — jamais purgé,
+/// affiché chronologiquement dans la fiche (voir MODULE-14 §1.2).
+model AssetMovement {
+  id        String   @id @default(uuid())
+  assetId   String   @map("asset_id")
+  changedBy String?  @map("changed_by")
+  field     String
+  oldValue  String?  @map("old_value")
+  newValue  String?  @map("new_value")
+  note      String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  asset          Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  changedByUser  User? @relation(fields: [changedBy], references: [id], onDelete: SetNull)
+
+  @@index([assetId, createdAt])
+  @@map("asset_movements")
+}
+
+/// Historique de maintenance/réparations d'un bien, avec coûts — voir MODULE-14 §1.3. Indépendant de
+/// la comptabilité (Module 7) : `performedBy` est un texte libre (intervenant interne ou prestataire
+/// externe non nécessairement un `Supplier`), `cost` un champ informatif uniquement.
+model AssetMaintenance {
+  id          String                 @id @default(uuid())
+  assetId     String                 @map("asset_id")
+  description String
+  cost        Decimal?               @db.Decimal(12, 2)
+  performedBy String?                @map("performed_by")
+  status      AssetMaintenanceStatus @default(PLANIFIEE)
+  scheduledAt DateTime?              @map("scheduled_at")
+  completedAt DateTime?              @map("completed_at")
+  createdBy   String?                @map("created_by")
+  createdAt   DateTime               @default(now()) @map("created_at")
+
+  asset         Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  createdByUser User? @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@index([assetId, createdAt])
+  @@map("asset_maintenances")
+}
+
+// ---------------------------------------------------------------------------
+// Module 13 — Bibliothèque
+// Voir docs/modules/MODULE-13-bibliotheque.md. Catalogue d'ouvrages/exemplaires
+// et emprunts, indépendant de la comptabilité — retards signalés visuellement
+// uniquement (décision explicite, pas de pénalité financière). Reprend le
+// pattern du Module 14 (catégorie configurable, numéro généré, emprunteur en
+// plusieurs FK nullables) plutôt que d'inventer un nouveau mécanisme.
+// ---------------------------------------------------------------------------
+
+enum BookCopyCondition {
+  BON
+  MOYEN
+  MAUVAIS
+}
+
+enum BookCopyStatus {
+  DISPONIBLE
+  EMPRUNTE
+  PERDU
+  RETIRE
+}
+
+enum LoanStatus {
+  EN_COURS
+  RENDU
+  PERDU
+}
+
+/// Référentiel configurable de catégories d'ouvrages (ex. Roman, Manuel scolaire) — même principe que
+/// `AssetCategory` (Module 14) : aucune catégorie codée en dur.
+model BookCategory {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  books Book[]
+
+  @@map("book_categories")
+}
+
+/// Fiche d'un titre (voir MODULE-13 §1.1) — indépendante du nombre d'exemplaires physiques possédés.
+model Book {
+  id              String   @id @default(uuid())
+  title           String
+  author          String?
+  categoryId      String   @map("category_id")
+  description     String?
+  publisher       String?
+  publicationYear Int?     @map("publication_year")
+  isbn            String?
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  category BookCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  copies   BookCopy[]
+
+  @@index([categoryId])
+  @@index([title])
+  @@map("books")
+}
+
+/// Un exemplaire physique précis d'un ouvrage — c'est l'exemplaire, jamais l'ouvrage, qui est emprunté
+/// (voir MODULE-13 §1.1). Jamais supprimé physiquement : un exemplaire perdu/retiré change de statut
+/// avec justification (§1.3), même règle que partout ailleurs dans le projet.
+model BookCopy {
+  id               String            @id @default(uuid())
+  inventoryNumber  String            @unique @map("inventory_number")
+  bookId           String            @map("book_id")
+  condition        BookCopyCondition @default(BON)
+  status           BookCopyStatus    @default(DISPONIBLE)
+  withdrawalReason String?           @map("withdrawal_reason")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+
+  book  Book   @relation(fields: [bookId], references: [id], onDelete: Restrict)
+  loans Loan[]
+
+  @@index([bookId])
+  @@index([status])
+  @@map("book_copies")
+}
+
+/// Emprunt d'un exemplaire — voir MODULE-13 §1.2. Emprunteur étudiant/enseignant/employé (un seul des
+/// trois renseigné), même convention que `Asset.responsibleEmployeeId`/`responsibleTeacherId` (Module 14).
+/// "En retard" n'est jamais stocké : toujours recalculé à l'affichage depuis `dueDate`, pour ne jamais
+/// se désynchroniser.
+model Loan {
+  id                  String     @id @default(uuid())
+  bookCopyId          String     @map("book_copy_id")
+  borrowerStudentId   String?    @map("borrower_student_id")
+  borrowerTeacherId   String?    @map("borrower_teacher_id")
+  borrowerEmployeeId  String?    @map("borrower_employee_id")
+  loanDate            DateTime   @default(now()) @map("loan_date")
+  dueDate             DateTime   @map("due_date")
+  returnedAt          DateTime?  @map("returned_at")
+  status              LoanStatus @default(EN_COURS)
+  createdBy           String?    @map("created_by")
+  createdAt           DateTime   @default(now()) @map("created_at")
+
+  bookCopy         BookCopy @relation(fields: [bookCopyId], references: [id], onDelete: Restrict)
+  borrowerStudent  Student? @relation("LoanBorrowerStudent", fields: [borrowerStudentId], references: [id], onDelete: SetNull)
+  borrowerTeacher  Teacher? @relation("LoanBorrowerTeacher", fields: [borrowerTeacherId], references: [id], onDelete: SetNull)
+  borrowerEmployee Employee? @relation("LoanBorrowerEmployee", fields: [borrowerEmployeeId], references: [id], onDelete: SetNull)
+  createdByUser    User?    @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@index([bookCopyId])
+  @@index([status, dueDate])
+  @@index([borrowerStudentId])
+  @@index([borrowerTeacherId])
+  @@index([borrowerEmployeeId])
+  @@map("loans")
+}
+
+/// Réglages de la bibliothèque — singleton (une seule ligne par installation), voir MODULE-13 §1.2.
+model LibrarySettings {
+  id                      String   @id @default(uuid())
+  defaultLoanDurationDays Int      @default(14) @map("default_loan_duration_days")
+  maxSimultaneousLoans    Int      @default(3) @map("max_simultaneous_loans")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  @@map("library_settings")
+}
+
+// ---------------------------------------------------------------------------
+// Module 13 (extension) — Bibliothèque numérique
+// Voir docs/modules/MODULE-13-bibliotheque.md §5-6. Fichiers numériques
+// (PDF/Word) stockés via saveDocumentFile() (Module 2), jamais "empruntés" —
+// restent disponibles pour tout le monde après partage. Partage par e-mail
+// (pièce jointe réelle) ou WhatsApp (lien de téléchargement uniquement — pas
+// d'API WhatsApp officielle, voir whatsAppLink.ts).
+// ---------------------------------------------------------------------------
+
+enum DigitalDocumentFormat {
+  PDF
+  DOCX
+}
+
+enum DigitalDocumentShareChannel {
+  EMAIL
+  WHATSAPP
+}
+
+/// Référentiel configurable de catégories de documents numériques — distinct de `BookCategory`
+/// (ouvrages physiques), voir MODULE-13 §5.3.
+model DigitalDocumentCategory {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  documents DigitalDocument[]
+
+  @@map("digital_document_categories")
+}
+
+/// Fichier numérique stocké (PDF/Word) — voir MODULE-13 §5.1. Jamais "emprunté" : reste disponible
+/// pour tout le monde après consultation/partage, à la différence de `BookCopy`.
+model DigitalDocument {
+  id            String                @id @default(uuid())
+  title         String
+  categoryId    String                @map("category_id")
+  filePath      String                @map("file_path")
+  fileFormat    DigitalDocumentFormat @map("file_format")
+  fileSizeBytes Int                   @map("file_size_bytes")
+  description   String?
+  uploadedBy    String?               @map("uploaded_by")
+  createdAt     DateTime              @default(now()) @map("created_at")
+
+  category      DigitalDocumentCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  uploadedByUser User?                  @relation(fields: [uploadedBy], references: [id], onDelete: SetNull)
+  shares        DigitalDocumentShare[]
+
+  @@index([categoryId])
+  @@index([title])
+  @@map("digital_documents")
+}
+
+/// Historique de partage — voir MODULE-13 §5.2. Destinataire étudiant/enseignant/employé (un seul des
+/// trois renseigné), même convention que `Loan.borrowerXxxId`.
+model DigitalDocumentShare {
+  id                  String                      @id @default(uuid())
+  documentId          String                      @map("document_id")
+  recipientStudentId  String?                     @map("recipient_student_id")
+  recipientTeacherId  String?                     @map("recipient_teacher_id")
+  recipientEmployeeId String?                     @map("recipient_employee_id")
+  channel             DigitalDocumentShareChannel
+  sharedBy            String?                     @map("shared_by")
+  sharedAt            DateTime                    @default(now()) @map("shared_at")
+
+  document         DigitalDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  recipientStudent  Student?  @relation("DigitalDocumentShareRecipientStudent", fields: [recipientStudentId], references: [id], onDelete: SetNull)
+  recipientTeacher  Teacher?  @relation("DigitalDocumentShareRecipientTeacher", fields: [recipientTeacherId], references: [id], onDelete: SetNull)
+  recipientEmployee Employee? @relation("DigitalDocumentShareRecipientEmployee", fields: [recipientEmployeeId], references: [id], onDelete: SetNull)
+  sharedByUser      User?     @relation(fields: [sharedBy], references: [id], onDelete: SetNull)
+
+  @@index([documentId])
+  @@index([recipientStudentId])
+  @@index([recipientTeacherId])
+  @@index([recipientEmployeeId])
+  @@map("digital_document_shares")
+}
+
+// ---------------------------------------------------------------------------
+// Module 15 — Portail web (fondations)
+// Voir docs/modules/MODULE-15-portail-web.md §3. Identités de connexion
+// externes (étudiant/tuteur/enseignant), indépendantes de `User` (personnel) —
+// aucun rôle RBAC, portée toujours limitée à ses propres données, vérifiée à
+// chaque requête plutôt que via une table de permissions. Un seul campus
+// pilote, architecture mono-campus/LAN existante strictement inchangée
+// (ADR-005/007) — ce module ajoute un second client au serveur existant.
+// ---------------------------------------------------------------------------
+
+/// Identifiants de connexion externes — un par étudiant/tuteur/enseignant habilité à se connecter au
+/// portail (MODULE-15 §2.1/§3). Trois FK nullables (un seul renseigné à la fois), même convention que
+/// `Loan`/`Asset`/`DigitalDocumentShare` — vraie intégrité référentielle plutôt qu'une relation
+/// polymorphe en texte libre.
+model PortalCredential {
+  id                 String    @id @default(uuid())
+  studentId          String?   @unique @map("student_id")
+  guardianId         String?   @unique @map("guardian_id")
+  teacherId          String?   @unique @map("teacher_id")
+  username           String    @unique
+  passwordHash       String    @map("password_hash")
+  mustChangePassword Boolean   @default(true) @map("must_change_password")
+  failedAttempts     Int       @default(0) @map("failed_attempts")
+  lockedUntil        DateTime? @map("locked_until")
+  isActive           Boolean   @default(true) @map("is_active")
+  createdBy          String?   @map("created_by")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  student       Student?  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  guardian      Guardian? @relation(fields: [guardianId], references: [id], onDelete: Cascade)
+  teacher       Teacher?  @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  createdByUser User?     @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+
+  sessions PortalSession[]
+
+  @@map("portal_credentials")
+}
+
+/// Session portail — même principe que `UserSession` (jeton haché, jamais un cookie), table séparée
+/// pour ne jamais mélanger les sessions de personnel et les sessions externes.
+model PortalSession {
+  id           String   @id @default(uuid())
+  credentialId String   @map("credential_id")
+  tokenHash    String   @unique @map("token_hash")
+  expiresAt    DateTime @map("expires_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+  lastSeenAt   DateTime @default(now()) @map("last_seen_at")
+
+  credential PortalCredential @relation(fields: [credentialId], references: [id], onDelete: Cascade)
+
+  @@index([credentialId])
+  @@map("portal_sessions")
+}
+
+// ---------------------------------------------------------------------------
+// Clé d'activation d'installation (2026-08-10, retour du porteur du projet)
+// Voir docs/DECISIONS.md ADR-054. Distincte de la connexion normale (`User`/
+// `UserSession`) : une clé sert une seule fois, à la première utilisation
+// d'un poste, pour créer le compte du collaborateur avec le rôle déjà choisi
+// par le Super Administrateur qui a généré la clé — jamais pour se
+// reconnecter ensuite (identifiant/mot de passe normal après coup).
+// ---------------------------------------------------------------------------
+
+enum ActivationKeyStatus {
+  UNUSED
+  USED
+}
+
+/// Clé d'activation — un "stock" de clés générées à l'avance par le Super Administrateur, chacune
+/// pré-associée à un rôle. Empêche qu'une installation copiée sur un poste non autorisé permette de
+/// créer un compte : sans clé valide et non utilisée, aucun compte ne peut être créé en dehors de
+/// l'écran Utilisateurs (réservé aux utilisateurs déjà connectés).
+model ActivationKey {
+  id           String              @id @default(uuid())
+  code         String              @unique
+  roleId       String              @map("role_id")
+  status       ActivationKeyStatus @default(UNUSED)
+  createdBy    String              @map("created_by")
+  usedByUserId String?             @unique @map("used_by_user_id")
+  usedAt       DateTime?           @map("used_at")
+  createdAt    DateTime            @default(now()) @map("created_at")
+
+  role          Role  @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  createdByUser User  @relation("ActivationKeyCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+  usedByUser    User? @relation("ActivationKeyUsedBy", fields: [usedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([roleId])
+  @@map("activation_keys")
+}
