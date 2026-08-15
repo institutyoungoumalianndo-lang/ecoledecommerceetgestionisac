@@ -16,6 +16,7 @@ export interface CampusServicePaths {
 
 let apiProcess: ChildProcess | null = null;
 let portalProcess: ChildProcess | null = null;
+let tunnelProcess: ChildProcess | null = null;
 
 function getMonorepoRoot(): string {
   return join(__dirname, "../../../../");
@@ -109,6 +110,32 @@ function spawnNodeScript(
   return child;
 }
 
+/** Lance le connecteur Cloudflare avec le jeton d'un tunnel nommé (configuration locale uniquement). */
+function startCloudflareTunnel(serverEnv: Record<string, string>): void {
+  const token = serverEnv.CLOUDFLARE_TUNNEL_TOKEN?.trim();
+  if (!token || (tunnelProcess && tunnelProcess.exitCode === null)) return;
+
+  const executableCandidates = [
+    serverEnv.CLOUDFLARED_PATH,
+    "C:\\Program Files\\cloudflared\\cloudflared.exe",
+    "C:\\Program Files (x86)\\cloudflared\\cloudflared.exe",
+  ].filter((value): value is string => Boolean(value));
+  const executable = executableCandidates.find((candidate) => existsSync(candidate));
+
+  if (!executable) {
+    console.warn("[campus-services] Cloudflared introuvable : installez Cloudflare Tunnel pour activer l'accès distant.");
+    return;
+  }
+
+  tunnelProcess = spawn(executable, ["tunnel", "--no-autoupdate", "run", "--token", token], {
+    env: { ...process.env },
+    stdio: "pipe",
+    windowsHide: true,
+  });
+  tunnelProcess.stdout?.on("data", (chunk: Buffer) => console.log(`[Cloudflare Tunnel] ${chunk.toString().trimEnd()}`));
+  tunnelProcess.stderr?.on("data", (chunk: Buffer) => console.error(`[Cloudflare Tunnel] ${chunk.toString().trimEnd()}`));
+}
+
 async function waitForHttp(url: string, timeoutMs = 60_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -157,6 +184,7 @@ export async function startCampusServicesIfNeeded(isServerHost: boolean): Promis
   if (!apiReady) {
     console.warn(`[campus-services] L'API n'a pas répondu à temps sur le port ${apiPort}.`);
   }
+  if (apiReady) startCloudflareTunnel(serverEnv);
 
   const portalReady = await waitForHttp(`http://127.0.0.1:${portalPort}/`);
   if (!portalReady) {
@@ -166,11 +194,12 @@ export async function startCampusServicesIfNeeded(isServerHost: boolean): Promis
 
 /** Arrête proprement les services lancés par l'application. */
 export function stopCampusServices(): void {
-  for (const proc of [apiProcess, portalProcess]) {
+  for (const proc of [apiProcess, portalProcess, tunnelProcess]) {
     if (proc && proc.exitCode === null) {
       proc.kill();
     }
   }
   apiProcess = null;
   portalProcess = null;
+  tunnelProcess = null;
 }

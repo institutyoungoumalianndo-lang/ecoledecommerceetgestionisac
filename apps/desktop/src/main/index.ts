@@ -93,7 +93,7 @@ async function ensureServerEnvTemplate(): Promise<void> {
 
   await writeFile(
     serverEnvPath,
-    `DATABASE_URL="postgresql://postgres:VOTRE_MOT_DE_PASSE@localhost:5432/isac_erp?schema=public"\nPORT=4310\nPORTAL_PORT=3000\n`,
+    `DATABASE_URL="postgresql://postgres:VOTRE_MOT_DE_PASSE@localhost:5432/isac_erp?schema=public"\nPORT=4310\nPORTAL_PORT=3000\n# Jeton d'un tunnel Cloudflare permanent (facultatif) :\n# CLOUDFLARE_TUNNEL_TOKEN=collez_ici_le_jeton\n`,
     "utf-8"
   );
 }
